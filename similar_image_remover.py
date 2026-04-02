@@ -392,7 +392,10 @@ def find_similar_images(
 
 
 def display_image_in_terminal(
-    image_path: str, max_width: int = None, max_height: int = None
+    image_path: str,
+    max_width: int = None,
+    max_height: int = None,
+    force_ascii: bool = False,
 ):
     """
     Display an image in the terminal using modern terminal image protocols.
@@ -401,6 +404,7 @@ def display_image_in_terminal(
     :param image_path: Path to the image file
     :param max_width: Maximum width in terminal columns (None = use original)
     :param max_height: Maximum height in terminal rows (None = use original)
+    :param force_ascii: If True, always use ASCII art regardless of terminal capabilities
     """
     from PIL import Image
     import shutil
@@ -467,8 +471,11 @@ def display_image_in_terminal(
                 width = orig_width
                 height = orig_height
 
+            # If force_ascii is set, use ASCII art regardless of terminal capabilities
+            if force_ascii:
+                _display_ascii_image(img, max_width or 40, max_height or 20)
             # Try Kitty graphics protocol first
-            if _supports_kitty_graphics():
+            elif _supports_kitty_graphics():
                 _display_kitty_image(image_path, img_resized)
             # Try Sixel
             elif _supports_sixel():
@@ -837,6 +844,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--ascii-images",
+        action="store_true",
+        help="Force ASCII art display for images regardless of terminal capabilities",
+    )
+
+    parser.add_argument(
         "--image-width",
         type=int,
         default=None,
@@ -949,7 +962,7 @@ Examples:
                 if not args.hide_images:
                     # Display the original image
                     display_image_in_terminal(
-                        img_path, args.image_width, args.image_height
+                        img_path, args.image_width, args.image_height, args.ascii_images
                     )
 
                 print(f"  is {similarity:.1%} similar to:")
@@ -958,7 +971,10 @@ Examples:
                 if not args.hide_images:
                     # Display the similar image
                     display_image_in_terminal(
-                        similar_img, args.image_width, args.image_height
+                        similar_img,
+                        args.image_width,
+                        args.image_height,
+                        args.ascii_images,
                     )
                     print()  # Extra newline after image pair
 

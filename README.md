@@ -178,7 +178,7 @@ python similar_image_remover.py -d /path/to/images --verbose
 
 ### Display Images in Terminal
 
-Images are **shown by default** when your terminal supports it (Kitty, Ghostty, iTerm2). Use `--hide-images` to suppress:
+Images are **shown by default** when your terminal supports it (Kitty, Ghostty, iTerm2). Use `--hide-images` to suppress or `--ascii-images` to force ASCII art display:
 
 ```bash
 # Images shown by default (if terminal supports it)
@@ -186,6 +186,9 @@ python similar_image_remover.py -d /path/to/images --threshold 0.99 --delete
 
 # Hide images (text only)
 python similar_image_remover.py -d /path/to/images --delete --hide-images
+
+# Force ASCII art display (works in any terminal)
+python similar_image_remover.py -d /path/to/images --delete --ascii-images
 
 # Control image size (width and height in terminal cells)
 python similar_image_remover.py -d /path/to/images --delete --image-width 30 --image-height 15
@@ -239,6 +242,7 @@ If images don't display:
 | `--gpu` | | Use GPU acceleration | `False` |
 | `--verbose` | `-v` | Show detailed output | `False` |
 | `--hide-images` | | Suppress image display | `False` (images shown) |
+| `--ascii-images` | | Force ASCII art display | `False` (uses terminal protocols) |
 | `--image-width` | | Max width for displayed images | Original size |
 | `--image-height` | | Max height for displayed images | Original size |
 
