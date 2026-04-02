@@ -238,6 +238,3 @@ PNG, JPEG/JPG, GIF, BMP, TIFF, WebP (scanned recursively)
 
 **Optional:** `opencv-python>=4.5.0`, `numpy>=1.20.0` (ORB), `torch>=1.12.0` (GPU)
 
-## License
-
-Apache License 2.0
