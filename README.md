@@ -87,7 +87,7 @@ python similar_image_remover.py -d /path/to/images --hash-method dhash --hash-me
 python similar_image_remover.py -d /path/to/images --hash-method crop_resistant --threshold 0.85
 
 # Adjust hash size (larger = more detail)
-python similar_image_remover.py -d /path/to/images --hash-method phash --hash-size 16 --threshold 0.90
+python similar_image_remover.py -d /path/to/images --hash-method phash --hash-size 64 --threshold 0.90
 ```
 
 ### Enable ORB Feature Verification
@@ -232,7 +232,7 @@ If images don't display:
 | `--force` | `-y` | Skip confirmation (use with --delete) | `False` |
 | `--threshold` | | Similarity threshold (0.0-1.0) | `0.90` (90%) |
 | `--hash-method` | | Hash method(s) - can use multiple | `ahash, phash` |
-| `--hash-size` | | Hash size (larger = more detail) | `8` |
+| `--hash-size` | | Hash size (larger = more detail) | `32` |
 | `--verify-orb` | | Enable ORB feature verification | `False` |
 | `--orb-min-matches` | | Minimum ORB matches required | `10` |
 | `--orb-threshold` | | ORB confidence threshold | `0.8` |

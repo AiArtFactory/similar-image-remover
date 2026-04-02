@@ -796,8 +796,8 @@ Examples:
     parser.add_argument(
         "--hash-size",
         type=int,
-        default=8,
-        help="Size of the hash for applicable methods (default: 8). Larger = more detail but slower",
+        default=32,
+        help="Size of the hash for applicable methods (default: 32). Larger = more detail but slower",
     )
 
     parser.add_argument(
