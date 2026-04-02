@@ -408,7 +408,7 @@ def display_image_in_terminal(
     import io
     import os
 
-    MAX_PIXEL_DIMENSION = 1500  # Maximum pixel dimension for terminal display
+    MAX_PIXEL_DIMENSION = 1000  # Maximum pixel dimension for terminal display
 
     if not os.path.exists(image_path):
         print(f"  [Image not found: {image_path}]")
