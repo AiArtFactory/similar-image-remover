@@ -504,6 +504,36 @@ class TestResolutionPreference(unittest.TestCase):
         self.assertNotIn(lone, keep + delete)
 
 
+class TestNoCliStateDependency(unittest.TestCase):
+    """Library functions must not depend on argparse state from main()."""
+
+    def setUp(self):
+        """Create one small image to operate on."""
+        self.test_dir = tempfile.mkdtemp()
+        self.image = os.path.join(self.test_dir, "a.png")
+        Image.new("RGB", (64, 64), (1, 2, 3)).save(self.image)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.test_dir)
+
+    def test_hash_failure_warns_without_cli_args(self):
+        """A failing hash method must warn, not raise NameError, outside main()."""
+        with mock.patch.object(
+            sir, "calculate_single_hash", side_effect=RuntimeError("boom")
+        ):
+            hashes = sir.calculate_hashes(self.test_dir, verbose=False)
+
+        self.assertEqual(hashes, {})
+
+    def test_orb_error_without_cli_args(self):
+        """An ORB failure must fall back, not raise NameError, outside main()."""
+        with mock.patch("cv2.imread", side_effect=RuntimeError("boom")):
+            result = sir.verify_with_orb(self.image, self.image, verbose=False)
+
+        self.assertEqual(result, (True, 0, 1.0))
+
+
 class TestIntegration(unittest.TestCase):
     """Integration tests using actual test_images directory."""
 
@@ -674,9 +704,18 @@ if __name__ == "__main__":
     test_images_dir = os.path.join(os.path.dirname(__file__), "test_images")
     if not os.path.exists(test_images_dir):
         print("Creating test images...")
-        import create_test_images
+        try:
+            import create_test_images
 
-        create_test_images.create_test_images(test_images_dir)
+            create_test_images.create_test_images(test_images_dir)
+        except ImportError:
+            # The generator was removed in commit 862e056 and test_images/ is
+            # gitignored, so this cannot succeed. Continue anyway: the
+            # integration tests skip themselves and the rest still run, which
+            # beats dying with a traceback before a single test executes.
+            print(
+                "create_test_images.py is gone; integration tests will be skipped."
+            )
 
     # Run tests
     unittest.main(verbosity=2)
