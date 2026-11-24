@@ -99,6 +99,7 @@ def calculate_hashes(
     hash_methods: List[str] = None,
     hash_size: int = 8,
     use_gpu: bool = False,
+    verbose: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Calculate hashes for images in a given directory using multiple methods.
@@ -107,6 +108,8 @@ def calculate_hashes(
     :param hash_methods: List of hash methods to use. Default: ["ahash", "phash"]
     :param hash_size: Size of the hash for applicable methods.
     :param use_gpu: Whether to use GPU acceleration if available.
+    :param verbose: Report images where an individual hash method failed. Explicit
+        rather than read from the CLI argument namespace, so this is callable outside main().
     :return: A dictionary where keys are filenames and values are dicts of hashes.
     """
     from PIL import Image
@@ -149,7 +152,7 @@ def calculate_hashes(
                             img, method, hash_size
                         )
                     except Exception as e:
-                        if args and hasattr(args, "verbose") and args.verbose:
+                        if verbose:
                             print(f"Warning: {method} failed for {image_path}: {e}")
                         continue
 
@@ -229,7 +232,7 @@ def compute_combined_similarity(
 
 
 def verify_with_orb(
-    img_path1: str, img_path2: str, min_matches: int = 10
+    img_path1: str, img_path2: str, min_matches: int = 10, verbose: bool = False
 ) -> Tuple[bool, int, float]:
     """
     Verify image similarity using ORB feature matching.
@@ -238,6 +241,7 @@ def verify_with_orb(
     :param img_path1: Path to first image
     :param img_path2: Path to second image
     :param min_matches: Minimum number of matching features to consider similar
+    :param verbose: Report verification errors instead of failing silently
     :return: Tuple of (is_similar, num_matches, confidence)
     """
     try:
@@ -298,7 +302,7 @@ def verify_with_orb(
         print("Warning: opencv-python not installed. ORB verification disabled.")
         return True, 0, 1.0  # Assume similar if can't verify
     except Exception as e:
-        if args and hasattr(args, "verbose") and args.verbose:
+        if verbose:
             print(f"ORB verification error: {e}")
         return True, 0, 1.0  # Assume similar on error
 
@@ -312,6 +316,7 @@ def find_similar_images(
     use_orb_verification: bool = False,
     orb_min_matches: int = 10,
     orb_threshold: float = 0.8,
+    verbose: bool = False,
 ) -> Dict[str, List[Tuple[str, float]]]:
     """
     Find similar images based on hashes in a directory.
@@ -324,9 +329,11 @@ def find_similar_images(
     :param use_orb_verification: Whether to use ORB feature matching as second stage.
     :param orb_min_matches: Minimum ORB matches to consider images similar.
     :param orb_threshold: Confidence threshold for ORB verification.
+    :param verbose: Report pairs that ORB rejected. Passed in rather than read from the
+        CLI argument namespace, so this function stays callable outside main().
     :return: A dictionary where keys are image filenames and values are lists of (similar_image, similarity) tuples.
     """
-    hashes = calculate_hashes(directory, hash_methods, hash_size, use_gpu)
+    hashes = calculate_hashes(directory, hash_methods, hash_size, use_gpu, verbose)
     similar_images = {}
     processed_pairs = set()
 
@@ -364,14 +371,14 @@ def find_similar_images(
             candidates, desc="Verifying with ORB", unit="pair"
         ):
             is_similar, num_matches, confidence = verify_with_orb(
-                path1, path2, orb_min_matches
+                path1, path2, orb_min_matches, verbose
             )
 
             if is_similar and confidence >= orb_threshold:
                 # Weight the final similarity
                 final_sim = (hash_sim * 0.3) + (confidence * 0.7)
                 verified_similar.append((path1, path2, final_sim))
-            elif args and hasattr(args, "verbose") and args.verbose:
+            elif verbose:
                 print(
                     f"  ORB rejected: {os.path.basename(path1)} vs {os.path.basename(path2)} "
                     f"({num_matches} matches, {confidence:.2%} confidence)"
@@ -1077,6 +1084,7 @@ Examples:
         use_orb_verification=args.verify_orb,
         orb_min_matches=args.orb_min_matches,
         orb_threshold=args.orb_threshold,
+        verbose=args.verbose,
     )
 
     if not similar_images_result:
