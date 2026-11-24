@@ -1,11 +1,12 @@
 # Similar Image Remover
 
-Find and optionally delete similar/duplicate images in a directory using perceptual hashing and optional feature-based verification.
+Find and optionally delete similar/duplicate images in a directory using perceptual hashing and optional feature-based verification. The highest-resolution copy in each group of duplicates is the one that survives.
 
 ## Features
 
 - **Cross-platform**: Works on Windows, macOS, and Linux
-- **Multi-device support**: CPU, CUDA (NVIDIA), MPS (Apple Silicon), AMD (ROCm)
+- **Resolution-aware dedupe**: keeps the copy with the most pixels, and breaks exact ties randomly (visible in the preview, reproducible with `--seed`)
+- **Device detection**: reports CUDA/MPS/ROCm availability, though hashing itself runs on the CPU
 - **Multiple hash methods**: Choose from 7 different perceptual hashing algorithms
 - **ORB feature verification**: Optional second-stage verification using computer vision features
 - **Percentage-based threshold**: Specify similarity as a percentage (e.g., 90%, 95%, 100%)
@@ -299,11 +300,15 @@ If images don't display:
 
 ## Testing
 
-Run the unit tests:
-
 ```bash
-python test_similar_image_remover.py
+python3 -m unittest test_similar_image_remover -v
+# equivalent:
+python3 test_similar_image_remover.py
 ```
+
+49 tests run. The four `TestIntegration` cases skip, because `test_images/` is
+gitignored and the `create_test_images.py` generator was removed from the repository.
+`OK (skipped=4)` is the expected result, not a failure.
 
 ## Examples
 
@@ -357,8 +362,11 @@ If you're getting false positives (images marked as similar when they're not):
 - **Speed**: Use `ahash` alone for fastest processing
 - **Balance**: Default `ahash` + `phash` works well for most cases
 - **Accuracy**: `crop_resistant` + `verify-orb` is most accurate but slowest
-- **GPU**: `--gpu` flag can speed up processing on supported hardware
-- **Hash size**: Default `--hash-size 8` is usually sufficient; larger sizes are slower
+- **GPU**: `--gpu` detects and prints CUDA/MPS, but hashing runs on the CPU because
+  `imagehash` is CPU-based — it does not currently change throughput
+- **Hash size**: The CLI default is `--hash-size 32`; larger values are slower and
+  more precise. Note that the callable functions default to `8`, so pass the value
+  explicitly when driving them from code
 
 ## License
 

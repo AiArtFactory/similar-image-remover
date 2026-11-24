@@ -1,194 +1,69 @@
-# AGENTS.md - Coding Guidelines for Similar Image Remover
+# AGENTS.md — similar-image-remover
 
-## Project Overview
+Single-file Python CLI that finds and deletes visually similar images using perceptual
+hashing, with optional ORB feature verification. No package, no build step, no CI, no
+linter/formatter config. `README.md` is user-facing; this file is the working spec.
 
-CLI tool for finding and deleting similar/duplicate images using perceptual hashing.
-Cross-platform: supports CPU, CUDA (NVIDIA), MPS (Apple Silicon), AMD (ROCm).
+## Run
 
-## Build/Run/Test Commands
+Dependencies are already installed in the `python3` on PATH (miniconda, Python 3.13,
+imagehash 4.3.2); `pip install -r requirements.txt` only if that stops being true.
 
-### Running the Tool
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the tool (dry-run preview mode)
-python similar_image_remover.py -d /path/to/images
-
-# Run with deletion (requires confirmation)
-python similar_image_remover.py -d /path/to/images --delete
+python3 similar_image_remover.py -d /path/to/images --hide-images      # dry run
+python3 similar_image_remover.py -d /path/to/images --delete           # prompts
+python3 similar_image_remover.py -d /path/to/images --delete -y        # no prompt
 ```
 
-### Testing
+- **Always pass `--hide-images` when output is captured.** Images render by default
+  through Kitty/Sixel/iTerm2 escapes and wreck piped or redirected output.
+- `--delete` uses `os.remove`: no trash, no undo. Dry run first.
+- Scanning is recursive, so `-d` must point at the exact folder intended — pointing it
+  at a parent of many datasets will delete across all of them.
 
-**Run all tests:**
+## Test
+
 ```bash
-python test_similar_image_remover.py
+python3 -m unittest test_similar_image_remover -v
+python3 test_similar_image_remover.py            # equivalent, also works
 ```
 
-**Run with unittest module (verbose):**
-```bash
-python -m unittest test_similar_image_remover -v
-```
+- `test_images/` is gitignored and absent, and its generator (`create_test_images.py`)
+  was deleted in 862e056, so the four `TestIntegration` tests skip. 45 of 49 run.
+  Skipped is the expected state, not a regression.
+- Narrow with `python3 -m unittest test_similar_image_remover.TestResolutionPreference -v`.
 
-**Run a single test class:**
-```bash
-python -m unittest test_similar_image_remover.TestHashFunctions -v
-```
+## Architecture
 
-**Run a single test method:**
-```bash
-python -m unittest test_similar_image_remover.TestHashFunctions.test_get_hash_function_valid_methods -v
-```
+- Flow: `main()` (argparse) → `find_similar_images()` → `select_files_to_keep()` →
+  preview and/or delete. The CLI is the only real entrypoint; there is no library API.
+- `select_files_to_keep()` is the single source of truth for the keep/delete split.
+  `delete_similar_images()` and `main()` both call it — do not reintroduce inline
+  selection logic, since removing that duplication is what commit e4375b2 was about.
+- Keep policy: inside each group, the file with the most pixels (`width * height`)
+  survives; exact-resolution ties are broken randomly, and the tie is printed so a dry
+  run stays auditable. `--seed` makes tie-breaking reproducible.
+- `_similarity_groups()` uses union-find because similarity is transitive (A~B, B~C
+  groups all three even when A≁C). A per-key pass is order-dependent and keeps the
+  wrong survivor on chains.
 
-**Run tests matching a pattern:**
-```bash
-python -m unittest discover -v -k "TestDevice"
-```
+## Gotchas
 
-### No Build Step
-This is a pure Python script - no compilation or build process required.
+- `hash_size` defaults to **8** in `calculate_hashes`/`find_similar_images`, but the
+  CLI passes **32**. Code that calls the functions directly silently gets coarser
+  hashes — and different matches — than the same options on the command line.
+- Do not read the `args` namespace from any function that can run outside `main()`.
+  That pattern crashed `find_similar_images(use_orb_verification=True)` with
+  `NameError` on the first ORB rejection. Verbosity is now an explicit `verbose`
+  parameter that `main()` fills from `args`; keep it that way.
+- `similar_images` is symmetric: each match is stored under both paths. Naive
+  iteration therefore double-counts every pair; dedupe with `tuple(sorted(...))` the
+  way the display code does.
 
-## Code Style Guidelines
+## Conventions
 
-### Import Order
-1. Standard library imports (io, os, sys, argparse, etc.)
-2. Third-party imports (tqdm, PIL, cv2, numpy, etc.)
-3. Local imports (if any)
-
-Example:
-```python
-import io
-import os
-import sys
-import argparse
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Union, Any
-
-from tqdm import tqdm
-from PIL import Image
-```
-
-### Type Hints
-- Use type hints for function parameters and return values
-- Use `from typing import` imports at the top
-- Use `Optional[Type]` for nullable values, not `Type | None`
-- Use `Any` sparingly - prefer specific types
-
-Example:
-```python
-def calculate_hashes(
-    directory: str,
-    hash_methods: List[str] = None,
-    hash_size: int = 8,
-    use_gpu: bool = False,
-) -> Dict[str, Dict[str, Any]]:
-```
-
-### Docstrings
-- Use Google-style docstrings (already established in codebase)
-- Include :param and :return descriptions
-- Keep descriptions concise
-
-Example:
-```python
-def hash_similarity(hash1, hash2) -> float:
-    """
-    Calculate similarity between two hashes as a percentage.
-
-    :param hash1: First hash value (ImageHash or ImageMultiHash object)
-    :param hash2: Second hash value (ImageHash or ImageMultiHash object)
-    :return: Similarity percentage (0.0 to 1.0, where 1.0 = identical)
-    """
-```
-
-### Naming Conventions
-
-| Type | Convention | Example |
-|------|------------|---------|
-| Functions | snake_case | `calculate_hashes`, `get_device` |
-| Classes | PascalCase | `TestHashFunctions` |
-| Constants | UPPER_SNAKE_CASE | `MAX_PIXEL_DIMENSION = 1000` |
-| Variables | snake_case | `image_path`, `hash_size` |
-| Private functions | _leading_underscore | `_supports_kitty_graphics` |
-
-### Formatting
-- 4 spaces for indentation (no tabs)
-- Line length: ~100 characters max (be reasonable)
-- Use implicit line continuation with parentheses for long lines
-- Two blank lines between top-level functions and classes
-- One blank line between methods in a class
-
-### Error Handling
-- Use specific exception types when possible (FileNotFoundError, PermissionError)
-- Provide informative error messages
-- Use try/except blocks to handle optional dependencies gracefully
-
-Example:
-```python
-try:
-    import torch
-    if torch.cuda.is_available():
-        return "cuda"
-except ImportError:
-    return "cpu"
-```
-
-### Function Design
-- Functions should do one thing (single responsibility)
-- Keep functions reasonably short (<50 lines ideally)
-- Use early returns to reduce nesting
-- Use type hints for clarity
-
-### Testing Patterns
-- Use unittest.TestCase subclasses
-- Test method names: `test_<function>_<scenario>`
-- Use setUp/tearDown for test fixtures
-- Mock external dependencies (os, sys) when appropriate
-- Test classes group related functionality
-
-Example:
-```python
-class TestHashFunctions(unittest.TestCase):
-    """Tests for hash function selection and calculation."""
-
-    def test_get_hash_function_valid_methods(self):
-        """Test that all valid hash methods can be retrieved."""
-        valid_methods = ["ahash", "phash", "dhash"]
-        for method in valid_methods:
-            func = sir.get_hash_function(method)
-            self.assertIsNotNone(func)
-```
-
-### CLI Argument Patterns
-- Use argparse with both short and long flags
-- Provide sensible defaults
-- Validate dependent flags (--force requires --delete)
-- Show helpful error messages
-
-## Project Structure
-
-```
-similar-image-remover/
-├── similar_image_remover.py      # Main script (executable)
-├── test_similar_image_remover.py # Unit tests
-├── requirements.txt              # Dependencies
-├── README.md                     # User documentation
-└── AGENTS.md                     # This file
-```
-
-## Dependencies
-
-**Core:** imagehash>=4.3.0, pillow>=9.0.0, tqdm>=4.62.0
-**ORB:** opencv-python>=4.5.0, numpy>=1.20.0
-**GPU:** torch>=1.12.0 (optional)
-**Test:** pytest>=7.0.0 (optional, but unittest is standard)
-
-## Notes for Agents
-
-- This is a CLI tool, not a library - main() is the entry point
-- Cross-platform support is important (Windows, macOS, Linux)
-- GPU acceleration is optional - always have CPU fallback
-- Image processing uses PIL and OpenCV - handle import errors gracefully
-- Tests create temporary files - always clean up in tearDown
-- Progress bars (tqdm) improve UX for long operations
+- Stdlib → third-party → local imports; `Optional[X]` rather than `X | None`;
+  Google-style docstrings with `:param:`/`:return:`; ~100 character lines; 4 spaces.
+- Tests are `unittest.TestCase` with `test_<function>_<scenario>` names, fixtures built
+  in `tempfile.mkdtemp()` and removed in `tearDown()`. `pytest` is listed as optional
+  and is not the runner.
