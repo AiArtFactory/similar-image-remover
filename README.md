@@ -367,7 +367,3 @@ If you're getting false positives (images marked as similar when they're not):
 - **Hash size**: The CLI default is `--hash-size 32`; larger values are slower and
   more precise. Note that the callable functions default to `8`, so pass the value
   explicitly when driving them from code
-
-## License
-
-MIT License
