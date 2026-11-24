@@ -865,7 +865,11 @@ def delete_similar_images(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Find and optionally delete similar/duplicate images in a directory.",
+        description=(
+            "Find and optionally delete similar/duplicate images in a directory.\n"
+            "Keeps the highest-resolution copy in each group of matches; exact "
+            "resolution ties are broken at random."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Hash Methods:
@@ -973,7 +977,7 @@ Examples:
     parser.add_argument(
         "--gpu",
         action="store_true",
-        help="Use GPU acceleration if available (requires PyTorch)",
+        help="Detect and report the best available device (CUDA/MPS/ROCm). Hashing runs on the CPU, so this does not change speed",
     )
 
     parser.add_argument(
