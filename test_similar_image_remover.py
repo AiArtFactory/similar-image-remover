@@ -362,9 +362,11 @@ class TestDeleteSimilarImages(unittest.TestCase):
         self.file3 = os.path.join(self.test_dir, "file3.png")
 
         img = Image.new("RGB", (100, 100), (255, 0, 0))
-        img.save(self.file1)
         img.save(self.file2)
         img.save(self.file3)
+
+        # file1 is the highest resolution in the group, so it must survive
+        Image.new("RGB", (200, 200), (255, 0, 0)).save(self.file1)
 
     def tearDown(self):
         """Clean up test fixtures."""
@@ -398,6 +400,110 @@ class TestDeleteSimilarImages(unittest.TestCase):
         self.assertFalse(os.path.exists(self.file3))
 
 
+class TestResolutionPreference(unittest.TestCase):
+    """Tests for keeping the highest-resolution image in each group."""
+
+    def setUp(self):
+        """Set up an empty temporary directory."""
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up the temporary directory."""
+        shutil.rmtree(self.test_dir)
+
+    def _make_image(self, name, width, height):
+        """Create an image of the given size and return its path."""
+        path = os.path.join(self.test_dir, name)
+        Image.new("RGB", (width, height), (10, 20, 30)).save(path)
+        return path
+
+    def test_get_image_resolution_reads_dimensions(self):
+        """Resolution is read from the file header."""
+        path = self._make_image("a.png", 640, 480)
+        self.assertEqual(sir.get_image_resolution(path), (640, 480))
+
+    def test_get_image_resolution_missing_file(self):
+        """An unreadable file reports (0, 0) instead of raising."""
+        self.assertEqual(
+            sir.get_image_resolution(os.path.join(self.test_dir, "nope.png")), (0, 0)
+        )
+
+    def test_keeps_highest_resolution(self):
+        """The largest image in a group survives."""
+        small = self._make_image("small.png", 800, 533)
+        medium = self._make_image("medium.png", 1200, 800)
+        large = self._make_image("large.png", 2400, 1600)
+
+        similar = {small: [(medium, 0.95), (large, 0.92)]}
+        keep, delete = sir.select_files_to_keep(similar)
+
+        self.assertEqual(keep, [large])
+        self.assertCountEqual(delete, [small, medium])
+
+    def test_keeps_largest_across_transitive_chain(self):
+        """A chain A~B, B~C is treated as one group; the largest wins."""
+        a = self._make_image("a.png", 2000, 2000)
+        b = self._make_image("b.png", 1000, 1000)
+        c = self._make_image("c.png", 500, 500)
+
+        # A never matched C directly, only through B
+        similar = {a: [(b, 0.93)], b: [(a, 0.93), (c, 0.91)]}
+        keep, delete = sir.select_files_to_keep(similar)
+
+        self.assertEqual(keep, [a])
+        self.assertCountEqual(delete, [b, c])
+
+    def test_tie_keeps_exactly_one(self):
+        """Identical resolutions keep one file and delete the rest."""
+        dupe_a = self._make_image("dupe_a.png", 1000, 1000)
+        dupe_b = self._make_image("dupe_b.png", 1000, 1000)
+        dupe_c = self._make_image("dupe_c.png", 1000, 1000)
+
+        similar = {dupe_a: [(dupe_b, 1.0), (dupe_c, 1.0)]}
+        keep, delete = sir.select_files_to_keep(similar, seed=7)
+
+        self.assertEqual(len(keep), 1)
+        self.assertCountEqual(keep + delete, [dupe_a, dupe_b, dupe_c])
+        self.assertNotIn(keep[0], delete)
+
+    def test_tie_is_reproducible_with_seed(self):
+        """The same seed picks the same winner every run."""
+        a = self._make_image("a.png", 900, 600)
+        b = self._make_image("b.png", 900, 600)
+        similar = {a: [(b, 1.0)]}
+
+        first = sir.select_files_to_keep(similar, seed=1234)
+        second = sir.select_files_to_keep(similar, seed=1234)
+
+        self.assertEqual(first, second)
+
+    def test_unreadable_file_loses_to_readable_one(self):
+        """A corrupt or missing file never beats a valid image."""
+        good = self._make_image("good.png", 300, 300)
+        broken = os.path.join(self.test_dir, "broken.png")
+        with open(broken, "w") as handle:
+            handle.write("not an image")
+
+        similar = {broken: [(good, 0.99)]}
+        keep, delete = sir.select_files_to_keep(similar)
+
+        self.assertEqual(keep, [good])
+        self.assertEqual(delete, [broken])
+
+    def test_files_without_matches_untouched(self):
+        """Files absent from the similarity map are not reported at all."""
+        a = self._make_image("a.png", 100, 100)
+        b = self._make_image("b.png", 200, 200)
+        lone = self._make_image("lone.png", 300, 300)
+
+        similar = {a: [(b, 0.95)]}
+        keep, delete = sir.select_files_to_keep(similar)
+
+        self.assertEqual(keep, [b])
+        self.assertEqual(delete, [a])
+        self.assertNotIn(lone, keep + delete)
+
+
 class TestIntegration(unittest.TestCase):
     """Integration tests using actual test_images directory."""
 
@@ -408,10 +514,15 @@ class TestIntegration(unittest.TestCase):
 
         # Create test images if they don't exist
         if not os.path.exists(cls.test_images_dir):
-            print("\nCreating test images...")
-            import create_test_images
+            try:
+                import create_test_images
 
-            create_test_images.create_test_images(cls.test_images_dir)
+                print("\nCreating test images...")
+                create_test_images.create_test_images(cls.test_images_dir)
+            except ImportError:
+                # The generator was removed in the repo cleanup; the individual
+                # tests skip themselves when the directory is absent.
+                print("\ntest_images/ absent and create_test_images.py not available")
 
     def test_integration_full_workflow(self):
         """Test the complete workflow."""

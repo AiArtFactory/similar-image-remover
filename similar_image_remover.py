@@ -25,6 +25,7 @@ Feature verification (optional second stage):
 import io
 import os
 import sys
+import random
 import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union, Any
@@ -666,41 +667,176 @@ def _display_ascii_image(img, width: int, height: int):
         print(f"  [ASCII display failed: {e}]")
 
 
+def get_image_resolution(path: str) -> Tuple[int, int]:
+    """
+    Read an image's dimensions without decoding the full pixel data.
+
+    Only the header is parsed, so ranking hundreds of files stays cheap even
+    when the images themselves are several thousand pixels wide.
+
+    :param path: Path to the image file
+    :return: (width, height), or (0, 0) if the file cannot be read
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            return img.width, img.height
+    except Exception:
+        # A corrupt or vanished file must not abort a delete run that may still
+        # have thousands of healthy files to process. Reporting (0, 0) makes it
+        # the lowest-ranked member of its group, so it loses to any readable
+        # file instead of being silently treated as equal.
+        return 0, 0
+
+
+def get_image_area(path: str) -> int:
+    """
+    Total pixel count of an image, used to rank duplicates by resolution.
+
+    Pixel count rather than width or height alone: a 4096x2160 image carries
+    more detail than a 2000x3000 one, and ranking by a single edge would
+    wrongly prefer whichever happens to be rotated or cropped to a square.
+
+    :param path: Path to the image file
+    :return: width * height, or 0 if the file cannot be read
+    """
+    width, height = get_image_resolution(path)
+    return width * height
+
+
+def _similarity_groups(
+    similar_images: Dict[str, List[Tuple[str, float]]],
+) -> List[List[str]]:
+    """
+    Group similar images into connected components.
+
+    Similarity is transitive in practice: if A matches B and B matches C, all
+    three belong to one group even when A and C never matched each other. A
+    plain per-key pass would therefore keep the wrong file depending on the
+    iteration order of the dictionary.
+
+    :param similar_images: Mapping of image path to (similar path, similarity) tuples
+    :return: List of groups, each a sorted list of file paths
+    """
+    parent: Dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    def union(a: str, b: str) -> None:
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[root_b] = root_a
+
+    for img_path, similar_list in similar_images.items():
+        find(img_path)
+        for similar_img, _ in similar_list:
+            union(img_path, similar_img)
+
+    grouped: Dict[str, List[str]] = {}
+    for node in parent:
+        grouped.setdefault(find(node), []).append(node)
+
+    return [sorted(members) for members in grouped.values()]
+
+
+def select_files_to_keep(
+    similar_images: Dict[str, List[Tuple[str, float]]],
+    seed: Optional[int] = None,
+) -> Tuple[List[str], List[str]]:
+    """
+    Choose which file survives in each group of similar images.
+
+    The file with the highest pixel count (width * height) is kept, so the
+    lowest-resolution copies are the ones removed. That is the useful direction
+    for dataset work: the surviving file keeps the most detail for training,
+    while the downgraded re-upload is the one that goes.
+
+    When several files in a group share that exact resolution - identical
+    duplicates, or the same image re-encoded at the same size - there is no
+    quality signal left to rank them, so one is kept at random. A fixed rule
+    (first path wins, alphabetically first wins) would instead bias the
+    survivor toward whatever the directory walk happened to see first, which
+    is not a property of the image at all.
+
+    :param similar_images: Mapping of image path to (similar path, similarity) tuples
+    :param seed: Optional seed for reproducible tie-breaking
+    :return: Tuple of (files to keep, files to delete), both sorted
+    """
+    rng = random.Random(seed)
+    areas: Dict[str, int] = {}
+    resolutions: Dict[str, Tuple[int, int]] = {}
+
+    def area_of(path: str) -> int:
+        # A file appears in several groups and both the max() and the tie filter
+        # below re-read every member, so cache the header read to keep a large
+        # directory from reopening the same file repeatedly.
+        if path not in areas:
+            resolutions[path] = get_image_resolution(path)
+            areas[path] = resolutions[path][0] * resolutions[path][1]
+        return areas[path]
+
+    files_to_keep: List[str] = []
+    files_to_delete: List[str] = []
+
+    for group in _similarity_groups(similar_images):
+        best_area = max(area_of(path) for path in group)
+        best = [path for path in group if area_of(path) == best_area]
+        winner = rng.choice(best) if len(best) > 1 else best[0]
+
+        # A random deletion is only acceptable when it is visible: say which
+        # resolution tied and which file the coin flip picked, so a surprising
+        # loss can be caught in the dry run rather than after --delete.
+        if len(best) > 1:
+            width, height = resolutions[winner]
+            print(
+                f"  {len(best)} files tied at {width}x{height}; "
+                f"kept {os.path.basename(winner)} at random"
+            )
+
+        files_to_keep.append(winner)
+        files_to_delete.extend(path for path in group if path != winner)
+
+    return sorted(files_to_keep), sorted(files_to_delete)
+
+
 def delete_similar_images(
-    similar_images: Dict[str, List[Tuple[str, float]]], dry_run: bool = True
+    similar_images: Dict[str, List[Tuple[str, float]]],
+    dry_run: bool = True,
+    seed: Optional[int] = None,
 ) -> List[str]:
     """
     Delete similar images based on the similarity dictionary, keeping one image.
 
     :param similar_images: A dictionary where keys are filenames and values are lists of (similar_image, similarity) tuples.
     :param dry_run: If True, only print what would be deleted without actually deleting.
+    :param seed: Optional seed for reproducible tie-breaking between equal resolutions.
     :return: List of deleted (or would-be-deleted) file paths.
     """
     deleted_files = []
-    files_to_keep = set()
-    files_to_delete = set()
-
-    # Determine which files to keep and which to delete
-    for img_path, similar_list in similar_images.items():
-        if img_path not in files_to_delete:
-            # Keep this file, mark similar ones for deletion
-            files_to_keep.add(img_path)
-            for similar_img, _ in similar_list:
-                if similar_img not in files_to_keep:
-                    files_to_delete.add(similar_img)
+    files_to_keep, files_to_delete = select_files_to_keep(similar_images, seed=seed)
 
     # Show which files will be kept
+    # Sizes are printed next to each path because the keep/delete split is
+    # decided by resolution: without them the preview cannot be verified.
     print(f"\n{'Would keep' if dry_run else 'Keeping'} {len(files_to_keep)} files:")
-    for file_path in sorted(files_to_keep):
-        print(f"  ✓ {file_path}")
+    for file_path in files_to_keep:
+        width, height = get_image_resolution(file_path)
+        print(f"  ✓ {file_path}  ({width}x{height})")
 
     # Show which files will be deleted
     if files_to_delete:
         print(
             f"\n{'Would delete' if dry_run else 'Deleting'} {len(files_to_delete)} files:"
         )
-        for file_path in sorted(files_to_delete):
-            print(f"  ✗ {file_path}")
+        for file_path in files_to_delete:
+            width, height = get_image_resolution(file_path)
+            print(f"  ✗ {file_path}  ({width}x{height})")
 
             if not dry_run:
                 try:
@@ -863,6 +999,14 @@ Examples:
         help="Maximum height for displayed images in terminal rows (default: original image height)",
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for reproducible tie-breaking when similar images share the same resolution. "
+        "Useful for tests, and for replaying the exact decision seen in a dry run",
+    )
+
     global args
     args = parser.parse_args()
 
@@ -978,17 +1122,11 @@ Examples:
                     )
                     print()  # Extra newline after image pair
 
-    # Determine what would be kept/deleted
+    # Determine what would be kept/deleted (highest resolution wins)
     deleted_files = []
-    files_to_keep = set()
-    files_to_delete = set()
-
-    for img_path, similar_list in similar_images_result.items():
-        if img_path not in files_to_delete:
-            files_to_keep.add(img_path)
-            for similar_img, _ in similar_list:
-                if similar_img not in files_to_keep:
-                    files_to_delete.add(similar_img)
+    files_to_keep, files_to_delete = select_files_to_keep(
+        similar_images_result, seed=args.seed
+    )
 
     # Show preview
     print(f"\n{'=' * 60}")
@@ -996,13 +1134,17 @@ Examples:
     print(f"{'=' * 60}")
 
     print(f"\nWould KEEP {len(files_to_keep)} files:")
-    for file_path in sorted(files_to_keep):
-        print(f"  ✓ {file_path}")
+    # Sizes are shown because resolution now decides the split, and a preview
+    # without them could not be checked against that rule at a glance.
+    for file_path in files_to_keep:
+        width, height = get_image_resolution(file_path)
+        print(f"  ✓ {file_path}  ({width}x{height})")
 
     if files_to_delete:
         print(f"\nWould DELETE {len(files_to_delete)} files:")
-        for file_path in sorted(files_to_delete):
-            print(f"  ✗ {file_path}")
+        for file_path in files_to_delete:
+            width, height = get_image_resolution(file_path)
+            print(f"  ✗ {file_path}  ({width}x{height})")
     else:
         print("\nNo files would be deleted.")
 

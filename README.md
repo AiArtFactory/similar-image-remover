@@ -245,6 +245,7 @@ If images don't display:
 | `--ascii-images` | | Force ASCII art display | `False` (uses terminal protocols) |
 | `--image-width` | | Max width for displayed images | Original size |
 | `--image-height` | | Max height for displayed images | Original size |
+| `--seed` | | Seed for reproducible tie-breaking between equal resolutions | `None` (random) |
 
 ## How It Works
 
@@ -264,8 +265,10 @@ If images don't display:
 
 ### Deduplication Strategy
 
-- Keeps the first image in each similar group
-- Marks subsequent images for deletion
+- Groups similar images into connected clusters (A~B and B~C form one group)
+- Keeps the **highest-resolution** image in each cluster, measured in total pixels (width × height)
+- Deletes the lower-resolution copies
+- When two or more files in a cluster share the exact same resolution, one is kept **at random** (`--seed` makes this reproducible); the choice is printed during the preview
 - Shows preview of kept vs deleted before any action
 
 ## Supported Image Formats
