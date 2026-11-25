@@ -283,11 +283,12 @@ which is intentional.
 all seven hash methods (multi-select), hash size, ORB verification and its two
 tuning values, tie-break seed, GPU detection and diagnostics. Settings that change
 the hashes or verification mark the panel **Settings changed — press Scan to
-apply**. The threshold is different: pairs are cached down to 50% similarity, so
-moving the slider regroups the existing pairs instantly and starts no scan. Values
-below 50% need a rescan and are clamped with a notice. A blank seed is replaced by
-one random seed per scan, stored with the results so the keeper does not change on
-reload; enter a number to make it reproducible.
+apply**. The threshold is different: a scan caches pairs down to its threshold,
+capped at 50%, so moving the slider regroups the existing pairs instantly and
+starts no scan. Lowering it below the cached floor needs a rescan, and a rescan
+at that lower threshold then caches that far. The panel shows the current floor.
+A blank seed is replaced by one random seed per scan, stored with the results so
+the keeper does not change on reload; enter a number to make it reproducible.
 
 **Review and delete.** Results are grouped into connected clusters. In each group
 the highest-resolution file is marked **KEEP** (the same rule and random tie-break
@@ -397,7 +398,7 @@ python3 -m unittest test_similar_image_remover -v
 python3 test_similar_image_remover.py
 ```
 
-76 tests run. The four `TestIntegration` cases skip, because `test_images/` is
+78 tests run. The four `TestIntegration` cases skip, because `test_images/` is
 gitignored and the `create_test_images.py` generator was removed from the repository.
 `OK (skipped=4)` is the expected result, not a failure. The web tests start a real
 server on a free loopback port and cover Basic Auth, path traversal, the dataset

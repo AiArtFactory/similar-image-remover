@@ -1012,6 +1012,27 @@ class TestWebHelpers(unittest.TestCase):
         self.assertEqual(config["seed"], 123)
         self.assertEqual(config["pair_floor"], web.PAIR_FLOOR)
 
+    def test_normalise_config_lowers_pair_floor_for_low_thresholds(self):
+        """A scan at 30% must cache down to 30%, or the UI can never show it."""
+        from web import server as web
+
+        config, error = web.normalise_config(
+            {"threshold": 0.30}, web.DEFAULT_CONFIG
+        )
+        self.assertIsNone(error)
+        self.assertAlmostEqual(config["pair_floor"], 0.30)
+
+    def test_build_results_uses_the_states_own_floor(self):
+        from web import server as web
+
+        state = self._state([["small.png", "large.png", 0.35]])
+        state["config"]["pair_floor"] = 0.35
+        low = web.build_results(self.directory, state, 0.35)
+        self.assertEqual(low["stats"]["groups"], 1)
+        lower = web.build_results(self.directory, state, 0.20)
+        self.assertTrue(lower["clamped"])
+        self.assertAlmostEqual(lower["threshold"], 0.35)
+
 
 class TestWebServer(unittest.TestCase):
     """End-to-end HTTP tests against a real server on a free port."""

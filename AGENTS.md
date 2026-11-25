@@ -38,7 +38,7 @@ python3 test_similar_image_remover.py            # equivalent, also works
 ```
 
 - `test_images/` is gitignored and absent, and its generator (`create_test_images.py`)
-  was deleted in 862e056, so the four `TestIntegration` tests skip. 72 of 76 run.
+  was deleted in 862e056, so the four `TestIntegration` tests skip. 74 of 78 run.
   Skipped is the expected state, not a regression.
 - `TestWebServer` starts a real server on a free loopback port, overrides
   `web.server.RUNS_ROOT` with a temp dir, and polls `/api/state` until the scan
@@ -87,10 +87,12 @@ python3 test_similar_image_remover.py            # equivalent, also works
   made every 32×32 near-duplicate score 0.0. `calculate_hashes`/`find_similar_images`
   default to **8**, while the CLI passes **32**; direct callers silently get different
   matches unless they pass the value explicitly.
-- **The pair floor is 0.5.** The web worker caches pairs down to `PAIR_FLOOR` so the
-  threshold slider regroups without rehashing. With ORB enabled this means every pair
-  at or above 0.5 is verified (slow but correct). Thresholds below 0.5 are clamped and
-  the UI says so.
+- **The pair floor is 0.5 by default, not a hard limit.** The web worker caches
+  pairs down to the scan's threshold, capped at `PAIR_FLOOR` (0.5), so a 0.9 scan
+  still allows instant regrouping down to 0.5, while a scan at 0.3 caches to 0.3.
+  With ORB enabled this means every pair at or above the floor is verified (slow
+  but correct). The threshold slider warns when the requested value is below the
+  cached floor.
 - **Do not trust the delete request.** `validate_deletions()` refuses pinned paths,
   paths outside the current result graph, and any set that would leave a similarity
   group with no existing file. A stale tab must not be able to empty a group.

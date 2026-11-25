@@ -15,7 +15,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--txt);
                font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  body { min-height: 100vh; padding-bottom: 110px; }
+  body { min-height: 100vh; padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px)); }
   button, select, input[type="text"], input[type="number"] {
     background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
     border-radius: 5px; padding: 5px 9px; font-size: 12px; font-family: inherit;
@@ -40,6 +40,16 @@
             white-space: nowrap; color: var(--dim); font-size: 12px; }
   #dsname b { color: var(--txt); font-weight: 600; }
   #status { color: var(--dim); font-size: 12px; white-space: nowrap; }
+  @media (max-width: 700px) {
+    /* One row cannot hold the title, dataset, two buttons and a status at
+       390 px without clipping the right edge. Put the dataset on its own row,
+       drop the non-essential status, and keep the buttons on one line. */
+    header { flex-wrap: wrap; row-gap: 4px; padding-top: 6px; padding-bottom: 6px; }
+    header h1 { font-size: 12px; }
+    header button { white-space: nowrap; }
+    #dsname { order: 10; flex-basis: 100%; max-width: 100%; }
+    #status { display: none; }
+  }
 
   #folderbar { display: none; gap: 8px; padding: 10px 12px; background: var(--panel2);
                border-bottom: 1px solid var(--line); align-items: center; }
@@ -153,7 +163,7 @@
 
   .emptygroup { padding: 24px; text-align: center; color: var(--dim); }
 
-  #bulkbar { position: fixed; left: 50%; bottom: var(--bulk-bottom, 14px);
+  #bulkbar { position: fixed; left: 50%; bottom: calc(var(--bulk-bottom, 14px) + env(safe-area-inset-bottom, 0px));
              transform: translateX(-50%);
              z-index: 30; display: none; align-items: center; gap: 12px;
              max-width: calc(100vw - 24px); padding: 9px 12px; border-radius: 9px;
@@ -223,7 +233,7 @@
     <div class="panelbody">
       <div class="label"><span>Similarity threshold</span><output id="thresholdLabel">90%</output></div>
       <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.9" />
-      <p class="hint">Applies instantly to cached pairs. Values below 50% need a rescan.</p>
+      <p class="hint" id="thresholdHint">Applies instantly to cached pairs; lower values need a rescan.</p>
 
       <fieldset>
         <legend>Hash methods</legend>
@@ -263,7 +273,7 @@
       <p class="hint">Blank picks one random seed per scan, then reuses it so the keeper never changes on reload.</p>
 
       <label class="row"><input id="gpu" type="checkbox" /> Detect GPU (hashing stays on the CPU)</label>
-      <label class="row"><input id="verbose" type="checkbox" /> Diagnostics in the scan log</label>
+      <label class="row"><input id="verbose" type="checkbox" /> Verbose diagnostics in the server console</label>
 
       <div class="actions">
         <button id="scanBtn" class="primary">Scan</button>
@@ -478,7 +488,7 @@
   function applyView(view) {
     if (!view) return;
     if (Number.isFinite(view.threshold)) {
-      threshold = Math.max(0.5, Math.min(1, view.threshold));
+      threshold = Math.max(0, Math.min(1, view.threshold));
       $("threshold").value = String(threshold);
     }
     if (["reclaimable", "groupsize", "similarity", "name"].includes(view.sort)) {
@@ -513,7 +523,7 @@
     $("seed").value = config.seed == null ? "" : String(config.seed);
     $("gpu").checked = !!config.use_gpu;
     $("verbose").checked = !!config.verbose;
-    threshold = Math.max(0.5, Math.min(1, Number(config.threshold ?? 0.9)));
+    threshold = Math.max(0, Math.min(1, Number(config.threshold ?? 0.9)));
     $("threshold").value = String(threshold);
     updateThresholdLabel();
     syncOrbVisibility();
@@ -606,10 +616,18 @@
         }
       }
       if (data.clamped) {
-        banner("Thresholds below 50% need a rescan; showing 50%.", "warn");
+        const floorPct = Math.round((data.pair_floor ?? 0.5) * 100);
+        banner(
+          `Pairs were cached at ${floorPct}% or above; lower values need a rescan. ` +
+          `Showing ${Math.round(data.threshold * 100)}%.`,
+          "warn"
+        );
       } else {
         hideBanner();
       }
+      const floorPct = Math.round((data.pair_floor ?? 0.5) * 100);
+      $("thresholdHint").textContent =
+        `Applies instantly to pairs cached at ${floorPct}% or above; lower values need a rescan.`;
       renderStats();
       renderGroups();
       updateBulkBar();

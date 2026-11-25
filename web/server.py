@@ -66,8 +66,9 @@ WEB_ROOT = Path(__file__).resolve().parent
 INDEX_HTML = WEB_ROOT / "index.html"
 WORKER = WEB_ROOT / "scan_worker.py"
 
-# Pairs are cached down to this similarity so the threshold slider can regroup
-# without rehashing. A threshold below it is clamped; the UI says so.
+# Pairs are cached down to the scan's own threshold, capped at this default
+# floor. A scan at 0.9 stores pairs to 0.5 so the slider can move freely; a scan
+# at 0.3 stores down to 0.3 so the user can actually review that threshold.
 PAIR_FLOOR = 0.5
 
 HASH_METHODS = [
@@ -262,7 +263,7 @@ def normalise_config(raw: Optional[Dict], base: Dict) -> Tuple[Dict, Optional[st
         except (TypeError, ValueError):
             return cfg, "seed must be an integer or blank"
 
-    cfg["pair_floor"] = PAIR_FLOOR
+    cfg["pair_floor"] = min(PAIR_FLOOR, cfg["threshold"])
     return cfg, None
 
 
@@ -323,7 +324,9 @@ def _state_from_payload(
     keep_pins = sorted(set(protected or []) & set(rels))
     cfg = dict(config)
     cfg["seed_used"] = int(seed_used)
-    cfg["pair_floor"] = PAIR_FLOOR
+    cfg["pair_floor"] = float(
+        cfg.get("pair_floor", cfg.get("scan_threshold", PAIR_FLOOR))
+    )
     return {
         "dataset": str(dataset.resolve()),
         "pairs": pairs,
@@ -426,7 +429,8 @@ def graph_at(dataset: Path, pairs: List[List], threshold: float) -> Dict[str, Li
 def build_results(dataset: Path, state: Dict, threshold: float) -> Dict:
     """Groups, policy survivors, similarity and reclaimable bytes at a threshold."""
     requested = float(threshold)
-    effective = max(PAIR_FLOOR, min(1.0, requested))
+    floor = float(state.get("config", {}).get("pair_floor", PAIR_FLOOR))
+    effective = max(floor, min(1.0, requested))
     graph = graph_at(dataset, state.get("pairs", []), effective)
 
     if not graph:
@@ -434,8 +438,8 @@ def build_results(dataset: Path, state: Dict, threshold: float) -> Dict:
             "groups": [],
             "threshold": effective,
             "requested_threshold": requested,
-            "clamped": requested < PAIR_FLOOR,
-            "pair_floor": PAIR_FLOOR,
+            "clamped": requested < floor,
+            "pair_floor": floor,
             "protected": sorted(state.get("protected", [])),
             "scanned_at": state.get("scanned_at"),
             "config": state.get("config", {}),
@@ -502,8 +506,8 @@ def build_results(dataset: Path, state: Dict, threshold: float) -> Dict:
         "groups": out,
         "threshold": effective,
         "requested_threshold": requested,
-        "clamped": requested < PAIR_FLOOR,
-        "pair_floor": PAIR_FLOOR,
+        "clamped": requested < floor,
+        "pair_floor": floor,
         "protected": sorted(protected),
         "scanned_at": state.get("scanned_at"),
         "config": state.get("config", {}),
@@ -529,7 +533,10 @@ def validate_deletions(
     if len(paths) > 10000:
         return [], {"_": "too many paths in one request"}
 
-    effective = max(PAIR_FLOOR, min(1.0, float(threshold)))
+    effective = max(
+        float(state.get("config", {}).get("pair_floor", PAIR_FLOOR)),
+        min(1.0, float(threshold)),
+    )
     graph = graph_at(dataset, state.get("pairs", []), effective)
     groups = core._similarity_groups(graph)
     group_of: Dict[str, int] = {}
@@ -735,6 +742,7 @@ class ScanJob(threading.Thread):
         seed_used: int,
         result_path: Path,
         stderr_tail: List[str],
+        drain_thread: threading.Thread,
     ):
         super().__init__()
         self.proc = proc
@@ -744,6 +752,7 @@ class ScanJob(threading.Thread):
         self.seed_used = seed_used
         self.result_path = result_path
         self.stderr_tail = stderr_tail
+        self.drain_thread = drain_thread
 
     def run(self) -> None:
         result_seen = False
@@ -774,11 +783,21 @@ class ScanJob(threading.Thread):
                     set_job(phase="error", error=str(event.get("error", "scan failed")))
 
             self.proc.wait()
+            self.drain_thread.join(timeout=1)
             # The reader has drained stdout. Close both pipes even when the
             # generation is stale, so tests and repeated scans do not leak fds.
             _close_pipes(self.proc)
             if not generation_current(self.generation, self.dataset):
                 return
+            if self.stderr_tail and (
+                self.config.get("verbose") or self.config.get("use_gpu")
+            ):
+                # The UI's "diagnostics" toggle and GPU detection write here.
+                # The worker's stdout is reserved for the JSON protocol, so this
+                # is the only place those messages can be seen.
+                print(f"  scan log ({self.dataset.name}):", flush=True)
+                for line in self.stderr_tail:
+                    print(f"    {line}", flush=True)
             if self.proc.returncode != 0 or not result_seen:
                 tail = "\n".join(self.stderr_tail[-8:]).strip()
                 set_job(
@@ -828,7 +847,7 @@ def _drain(pipe, tail: List[str]) -> None:
             line = line.rstrip()
             if line:
                 tail.append(line)
-                del tail[:-8]
+                del tail[:-40]
     except Exception:  # noqa: BLE001
         pass
 
@@ -910,7 +929,10 @@ def start_scan(dataset: Path, config: Dict) -> Dict:
     )
     tail: List[str] = []
     assert proc.stderr is not None
-    threading.Thread(target=_drain, args=(proc.stderr, tail), daemon=True).start()
+    drain_thread = threading.Thread(
+        target=_drain, args=(proc.stderr, tail), daemon=True
+    )
+    drain_thread.start()
 
     with CFG_LOCK:
         CFG["scan_proc"] = proc
@@ -925,7 +947,16 @@ def start_scan(dataset: Path, config: Dict) -> Dict:
         started=now(),
         finished=None,
     )
-    ScanJob(proc, dataset, generation, config, seed_used, result_path, tail).start()
+    ScanJob(
+        proc,
+        dataset,
+        generation,
+        config,
+        seed_used,
+        result_path,
+        tail,
+        drain_thread,
+    ).start()
     return config
 
 
@@ -999,7 +1030,9 @@ def state_response() -> Dict:
         "config": current_config or defaults,
         "defaults": defaults,
         "protected_count": len(state.get("protected", [])) if state else 0,
-        "pair_floor": PAIR_FLOOR,
+        "pair_floor": float(
+            (current_config or {}).get("pair_floor", PAIR_FLOOR)
+        ),
         "auth": auth,
     }
 
