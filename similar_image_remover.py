@@ -28,7 +28,7 @@ import sys
 import random
 import argparse
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Union, Any
+from typing import Callable, Dict, List, Tuple, Optional, Union, Any
 from tqdm import tqdm
 
 
@@ -100,6 +100,7 @@ def calculate_hashes(
     hash_size: int = 8,
     use_gpu: bool = False,
     verbose: bool = False,
+    progress: Optional[Callable[[str, int, int, str], None]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Calculate hashes for images in a given directory using multiple methods.
@@ -110,6 +111,8 @@ def calculate_hashes(
     :param use_gpu: Whether to use GPU acceleration if available.
     :param verbose: Report images where an individual hash method failed. Explicit
         rather than read from the CLI argument namespace, so this is callable outside main().
+    :param progress: Optional callback ``(stage, done, total, current)``. When set,
+        tqdm is suppressed so a caller such as the web server can own the display.
     :return: A dictionary where keys are filenames and values are dicts of hashes.
     """
     from PIL import Image
@@ -141,8 +144,17 @@ def calculate_hashes(
     if use_gpu and device != "cpu":
         print(f"Using device: {device}")
 
-    # Use tqdm to display progress bar
-    for image_path in tqdm(all_files, desc="Calculating hashes", unit="image"):
+    total = len(all_files)
+    # When a progress callback is supplied (the web scan), tqdm would write to
+    # the same stream the caller is parsing. Keep exactly one reporter.
+    iterator = (
+        all_files
+        if progress is not None
+        else tqdm(all_files, desc="Calculating hashes", unit="image")
+    )
+    for index, image_path in enumerate(iterator, 1):
+        if progress is not None:
+            progress("hashing", index, total, image_path)
         try:
             with Image.open(image_path) as img:
                 image_hashes = {}
@@ -190,10 +202,20 @@ def hash_similarity(hash1, hash2) -> float:
             max_possible = max(len(hash1.hash), len(hash2.hash))
             return matches / max_possible if max_possible > 0 else 0.0
 
-    # Handle regular hashes
-    max_diff = 64  # 8x8 hash = 64 bits (for most hash types)
+    # Handle regular hashes. The divisor is the actual number of bits in the
+    # hash, not a fixed 64: `-` returns the Hamming distance, and hash_size=32
+    # yields 1024 bits, so dividing by 64 clamped every distance above 64 bits
+    # to "not similar at all". colorhash is 42 bits, whash and friends are
+    # hash_size**2. Both sides must agree; the larger size is used so a stale
+    # hash from another run cannot make the result exceed a sane range.
     diff = hash1 - hash2
-    similarity = 1.0 - (diff / max_diff)
+    bits = max(
+        getattr(getattr(hash1, "hash", None), "size", 0),
+        getattr(getattr(hash2, "hash", None), "size", 0),
+    )
+    if not bits:
+        return 0.0
+    similarity = 1.0 - (diff / bits)
     return max(0.0, min(1.0, similarity))  # Clamp between 0 and 1
 
 
@@ -317,6 +339,7 @@ def find_similar_images(
     orb_min_matches: int = 10,
     orb_threshold: float = 0.8,
     verbose: bool = False,
+    progress: Optional[Callable[[str, int, int, str], None]] = None,
 ) -> Dict[str, List[Tuple[str, float]]]:
     """
     Find similar images based on hashes in a directory.
@@ -331,9 +354,13 @@ def find_similar_images(
     :param orb_threshold: Confidence threshold for ORB verification.
     :param verbose: Report pairs that ORB rejected. Passed in rather than read from the
         CLI argument namespace, so this function stays callable outside main().
+    :param progress: Optional callback ``(stage, done, total, current)`` with stages
+        ``hashing``, ``comparing`` and ``orb``. Suppresses tqdm when supplied.
     :return: A dictionary where keys are image filenames and values are lists of (similar_image, similarity) tuples.
     """
-    hashes = calculate_hashes(directory, hash_methods, hash_size, use_gpu, verbose)
+    hashes = calculate_hashes(
+        directory, hash_methods, hash_size, use_gpu, verbose, progress=progress
+    )
     similar_images = {}
     processed_pairs = set()
 
@@ -344,10 +371,15 @@ def find_similar_images(
 
     # First pass: find candidates using hashes
     candidates = []
+    total_pairs = len(hash_items) * (len(hash_items) - 1) // 2
+    compared_pairs = 0
 
-    for i, (path1, hash1_dict) in enumerate(
-        tqdm(hash_items, desc="Comparing images (hash)", unit="pair")
-    ):
+    hash_iterator = (
+        hash_items
+        if progress is not None
+        else tqdm(hash_items, desc="Comparing images (hash)", unit="pair")
+    )
+    for i, (path1, hash1_dict) in enumerate(hash_iterator):
         for j, (path2, hash2_dict) in enumerate(hash_items):
             if i >= j:  # Avoid duplicate comparisons
                 continue
@@ -358,6 +390,10 @@ def find_similar_images(
                 continue
             processed_pairs.add(pair_id)
 
+            compared_pairs += 1
+            if progress is not None:
+                progress("comparing", compared_pairs, total_pairs, path1)
+
             # Compute combined similarity across all hash methods
             similarity = compute_combined_similarity(hash1_dict, hash2_dict)
 
@@ -367,9 +403,20 @@ def find_similar_images(
     # Second pass: ORB verification if requested
     if use_orb_verification and candidates:
         verified_similar = []
-        for path1, path2, hash_sim in tqdm(
-            candidates, desc="Verifying with ORB", unit="pair"
-        ):
+        total_candidates = len(candidates)
+        candidate_iterator = (
+            candidates
+            if progress is not None
+            else tqdm(candidates, desc="Verifying with ORB", unit="pair")
+        )
+        for index, (path1, path2, hash_sim) in enumerate(candidate_iterator, 1):
+            if progress is not None:
+                progress(
+                    "orb",
+                    index,
+                    total_candidates,
+                    f"{os.path.basename(path1)} vs {os.path.basename(path2)}",
+                )
             is_similar, num_matches, confidence = verify_with_orb(
                 path1, path2, orb_min_matches, verbose
             )
@@ -755,6 +802,7 @@ def _similarity_groups(
 def select_files_to_keep(
     similar_images: Dict[str, List[Tuple[str, float]]],
     seed: Optional[int] = None,
+    report: Optional[Callable[[str], None]] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Choose which file survives in each group of similar images.
@@ -773,8 +821,12 @@ def select_files_to_keep(
 
     :param similar_images: Mapping of image path to (similar path, similarity) tuples
     :param seed: Optional seed for reproducible tie-breaking
+    :param report: Optional sink for tie messages. Defaults to print. The web
+        server passes a collector so a grouping request does not spray the
+        server log, while the CLI keeps the auditable dry-run output.
     :return: Tuple of (files to keep, files to delete), both sorted
     """
+    emit = report if report is not None else print
     rng = random.Random(seed)
     areas: Dict[str, int] = {}
     resolutions: Dict[str, Tuple[int, int]] = {}
@@ -801,7 +853,7 @@ def select_files_to_keep(
         # loss can be caught in the dry run rather than after --delete.
         if len(best) > 1:
             width, height = resolutions[winner]
-            print(
+            emit(
                 f"  {len(best)} files tied at {width}x{height}; "
                 f"kept {os.path.basename(winner)} at random"
             )
@@ -906,8 +958,10 @@ Examples:
         "-d",
         "--directory",
         type=str,
-        required=True,
-        help="Path to the directory containing images",
+        required=False,
+        help="Path to the directory containing images. Required for the command "
+        "line; optional with --web, where it is the initial folder and can be "
+        "changed from the page.",
     )
 
     parser.add_argument(
@@ -1018,8 +1072,117 @@ Examples:
         "Useful for tests, and for replaying the exact decision seen in a dry run",
     )
 
+    # Web UI options. The server binds 0.0.0.0 by default so the LAN link works;
+    # --local-only restricts it to loopback. Authentication is mandatory unless
+    # --no-auth is passed explicitly for this run.
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Start the browser UI instead of the command-line workflow",
+    )
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="Address to bind in web mode (default: 0.0.0.0, all interfaces)",
+    )
+    parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="Web mode: bind 127.0.0.1 only; other devices cannot connect",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8766,
+        help="Web mode: port to listen on (default: 8766). Use 0 to let the OS "
+        "pick a free port; the chosen port is printed",
+    )
+    parser.add_argument(
+        "--username",
+        default=None,
+        help="Web mode: HTTP Basic Auth username (required unless --no-auth)",
+    )
+    parser.add_argument(
+        "--password",
+        default=None,
+        help="Web mode: HTTP Basic Auth password (required unless --no-auth). "
+        "Can also be supplied through the SIR_PASSWORD environment variable",
+    )
+    parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="Web mode: serve without a username and password for this run only. "
+        "Anyone who can reach the port can open the page and delete files",
+    )
+    parser.add_argument(
+        "--open",
+        dest="open_browser",
+        action="store_true",
+        help="Web mode: open the local URL in the default browser after start",
+    )
+
     global args
     args = parser.parse_args()
+
+    if args.port < 0 or args.port > 65535:
+        parser.error("--port must be between 0 and 65535")
+
+    if args.local_only and args.host and args.host != "127.0.0.1":
+        parser.error("--local-only cannot be combined with --host other than 127.0.0.1")
+
+    # Web mode: hand off to the review server. All other CLI-only behaviour
+    # (dry run, --delete/--force, terminal image display) does not apply.
+    if args.web:
+        password = args.password or os.environ.get("SIR_PASSWORD")
+        if not args.no_auth and not (args.username and password):
+            print(
+                "Error: web mode requires --username and --password (or set "
+                "SIR_PASSWORD), or pass --no-auth for this session.",
+                file=sys.stderr,
+            )
+            print("\nExamples:", file=sys.stderr)
+            print(
+                "  python similar_image_remover.py --web --username me --password secret",
+                file=sys.stderr,
+            )
+            print(
+                "  python similar_image_remover.py --web --no-auth --port 8766",
+                file=sys.stderr,
+            )
+            return 2
+        if args.no_auth and (args.username or args.password):
+            print(
+                "Note: --no-auth overrides --username/--password; the page will "
+                "not prompt for credentials.",
+                file=sys.stderr,
+            )
+
+        from web.server import run_server
+
+        host = "127.0.0.1" if args.local_only else (args.host or "0.0.0.0")
+        return run_server(
+            directory=args.directory,
+            host=host,
+            port=args.port,
+            username=args.username,
+            password=password,
+            auth=not args.no_auth,
+            open_browser=args.open_browser,
+            defaults={
+                "threshold": args.threshold,
+                "hash_methods": args.hash_methods or ["ahash", "phash"],
+                "hash_size": args.hash_size,
+                "verify_orb": args.verify_orb,
+                "orb_min_matches": args.orb_min_matches,
+                "orb_threshold": args.orb_threshold,
+                "use_gpu": args.gpu,
+                "verbose": args.verbose,
+                "seed": args.seed,
+            },
+        )
+
+    if not args.directory:
+        parser.error("the following arguments are required: -d/--directory")
 
     # Validate that --force/-y requires --delete
     if args.force and not args.delete:
@@ -1209,4 +1372,5 @@ Examples:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
+
