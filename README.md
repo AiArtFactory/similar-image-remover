@@ -1,6 +1,52 @@
 # Similar Image Remover
 
-Find and optionally delete similar/duplicate images in a directory using perceptual hashing and optional feature-based verification. The highest-resolution copy in each group of duplicates is the one that survives.
+Find duplicate and near-duplicate images in a folder, keep the highest-resolution copy in each group, and delete the rest after review. It runs as a command-line tool or as a local/LAN web UI for desktop and phone.
+
+![Desktop web UI reviewing a Monet library](docs/screenshots/desktop-results.png)
+
+*Desktop review in Chrome after a 90% scan of a 99-image Claude Monet library: four groups, nine matched files, 1.79 MB reclaimable. The demo images are public-domain Monet paintings and are not included in the repository.*
+
+<img src="docs/screenshots/phone-results.png" width="340" alt="Phone web UI showing the same Monet review with two-column tiles">
+
+*The same scan from a phone on the same Wi-Fi, in Android Chrome. The grid drops to two columns, the settings panel folds away, and the bulk bar stays within reach. Hashing runs on the server; the phone renders cached thumbnails.*
+
+| | Desktop | Phone |
+|---|---|---|
+| Folder picker | Native Finder/Explorer dialog, or the in-page browser | In-page browser of the server's filesystem |
+| Layout | Settings sidebar and a wide grid | Folded settings and a two-column grid |
+| Review and delete | Same groups, pins and confirmation | Same session, reached over the LAN |
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+
+# Preview from the CLI (drop --hide-images to show the previews in the terminal)
+python3 similar_image_remover.py -d /path/to/images --hide-images
+
+# Review in a browser; prints local and LAN URLs
+python3 similar_image_remover.py --web --username me --password secret
+
+# Tests
+python3 -m unittest test_similar_image_remover
+```
+
+## Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Hash Methods](#hash-methods)
+- [Usage](#usage)
+- [Web UI](#web-ui)
+- [Command Line Arguments](#command-line-arguments)
+- [How It Works](#how-it-works)
+- [Supported Image Formats](#supported-image-formats)
+- [Safety Features](#safety-features)
+- [Safety Notes](#safety-notes)
+- [Testing](#testing)
+- [Examples](#examples)
+- [Troubleshooting False Positives](#troubleshooting-false-positives)
+- [Performance Tips](#performance-tips)
 
 ## Features
 
@@ -71,7 +117,7 @@ The script supports 7 different perceptual hashing algorithms:
 Preview what would be deleted without actually deleting:
 
 ```bash
-python similar_image_remover.py -d /path/to/images
+python3 similar_image_remover.py -d /path/to/images
 ```
 
 ### Select Hash Methods
@@ -80,16 +126,16 @@ Use specific hash method(s):
 
 ```bash
 # Use only dhash (faster, edge-sensitive)
-python similar_image_remover.py -d /path/to/images --hash-method dhash
+python3 similar_image_remover.py -d /path/to/images --hash-method dhash
 
 # Use multiple methods (more accurate, slower)
-python similar_image_remover.py -d /path/to/images --hash-method dhash --hash-method whash
+python3 similar_image_remover.py -d /path/to/images --hash-method dhash --hash-method whash
 
 # Use crop-resistant hash (most robust)
-python similar_image_remover.py -d /path/to/images --hash-method crop_resistant --threshold 0.85
+python3 similar_image_remover.py -d /path/to/images --hash-method crop_resistant --threshold 0.85
 
 # Adjust hash size (larger = more detail)
-python similar_image_remover.py -d /path/to/images --hash-method phash --hash-size 64 --threshold 0.90
+python3 similar_image_remover.py -d /path/to/images --hash-method phash --hash-size 64 --threshold 0.90
 ```
 
 ### Enable ORB Feature Verification
@@ -98,13 +144,13 @@ For maximum accuracy, enable ORB feature matching as a second stage:
 
 ```bash
 # Basic ORB verification
-python similar_image_remover.py -d /path/to/images --verify-orb
+python3 similar_image_remover.py -d /path/to/images --verify-orb
 
 # Strict ORB verification (more matches required)
-python similar_image_remover.py -d /path/to/images --verify-orb --orb-min-matches 20
+python3 similar_image_remover.py -d /path/to/images --verify-orb --orb-min-matches 20
 
 # Combine with specific hash method
-python similar_image_remover.py -d /path/to/images --hash-method dhash --verify-orb --threshold 0.85
+python3 similar_image_remover.py -d /path/to/images --hash-method dhash --verify-orb --threshold 0.85
 ```
 
 **How ORB verification works:**
@@ -118,7 +164,7 @@ python similar_image_remover.py -d /path/to/images --hash-method dhash --verify-
 Shows a preview and prompts for confirmation before deleting:
 
 ```bash
-python similar_image_remover.py -d /path/to/images --delete
+python3 similar_image_remover.py -d /path/to/images --delete
 ```
 
 **Workflow:**
@@ -133,10 +179,10 @@ Use `-y` or `--force` **with** `--delete` to skip the confirmation prompt (for s
 
 ```bash
 # Short flag
-python similar_image_remover.py -d /path/to/images --delete -y
+python3 similar_image_remover.py -d /path/to/images --delete -y
 
 # Long flag
-python similar_image_remover.py -d /path/to/images --delete --force
+python3 similar_image_remover.py -d /path/to/images --delete --force
 ```
 
 **Important**: The `-y`/`--force` flag requires `--delete`. Using `-y` without `--delete` will show an error and exit without deleting anything. This prevents accidental deletions.
@@ -147,16 +193,16 @@ Control how similar images must be to be considered duplicates:
 
 ```bash
 # Very strict - only identical images (100%)
-python similar_image_remover.py -d /path/to/images --threshold 1.0 --delete
+python3 similar_image_remover.py -d /path/to/images --threshold 1.0 --delete
 
 # Strict - 95% similarity or higher (default is 90%)
-python similar_image_remover.py -d /path/to/images --threshold 0.95 --delete
+python3 similar_image_remover.py -d /path/to/images --threshold 0.95 --delete
 
 # Lenient - 80% similarity or higher
-python similar_image_remover.py -d /path/to/images --threshold 0.80 --delete
+python3 similar_image_remover.py -d /path/to/images --threshold 0.80 --delete
 
 # Very lenient - 50% similarity or higher
-python similar_image_remover.py -d /path/to/images --threshold 0.50 --delete
+python3 similar_image_remover.py -d /path/to/images --threshold 0.50 --delete
 ```
 
 **Note**: Threshold is specified as a decimal (0.0 to 1.0) where:
@@ -167,15 +213,15 @@ python similar_image_remover.py -d /path/to/images --threshold 0.50 --delete
 ### With GPU Acceleration
 
 ```bash
-python similar_image_remover.py -d /path/to/images --delete --gpu
+python3 similar_image_remover.py -d /path/to/images --delete --gpu
 ```
 
 ### Verbose Output
 
 ```bash
-python similar_image_remover.py -d /path/to/images -v
+python3 similar_image_remover.py -d /path/to/images -v
 # or
-python similar_image_remover.py -d /path/to/images --verbose
+python3 similar_image_remover.py -d /path/to/images --verbose
 ```
 
 ### Display Images in Terminal
@@ -184,16 +230,16 @@ Images are **shown by default** when your terminal supports it (Kitty, Ghostty, 
 
 ```bash
 # Images shown by default (if terminal supports it)
-python similar_image_remover.py -d /path/to/images --threshold 0.99 --delete
+python3 similar_image_remover.py -d /path/to/images --threshold 0.99 --delete
 
 # Hide images (text only)
-python similar_image_remover.py -d /path/to/images --delete --hide-images
+python3 similar_image_remover.py -d /path/to/images --delete --hide-images
 
 # Force ASCII art display (works in any terminal)
-python similar_image_remover.py -d /path/to/images --delete --ascii-images
+python3 similar_image_remover.py -d /path/to/images --delete --ascii-images
 
 # Control image size (width and height in terminal cells)
-python similar_image_remover.py -d /path/to/images --delete --image-width 30 --image-height 15
+python3 similar_image_remover.py -d /path/to/images --delete --image-width 30 --image-height 15
 ```
 
 **Large Image Handling:**
@@ -301,6 +347,16 @@ process) releases the port.
   platform), the page falls back to the in-page browser. The 📁 button beside
   **Choose folder** opens the in-page browser even on the desktop.
 
+**The folder browser.**
+
+![Desktop folder picker showing 99 Monet images](docs/screenshots/desktop-picker.png)
+
+*The desktop folder browser. The current folder reports its recursive image count and per-format breakdown; each child folder reports its direct count. The same browser opens from the 📁 button when the native dialog is unavailable or when you prefer it.*
+
+<img src="docs/screenshots/phone-picker.png" width="340" alt="Phone folder picker browsing the server's filesystem">
+
+*The same browser on a phone. It lists the server's folders, never the phone's storage, and the footer says so. **Select this folder** points the scan at the directory being viewed.*
+
 There is no sandbox: the authenticated user can browse and select any readable
 directory. That is the point of the feature, and why authentication is mandatory
 by default.
@@ -335,6 +391,10 @@ bottom bar, opens a confirmation listing the files and total size. Deletion is
 permanent `os.remove` — there is no trash and no undo — and the server refuses to
 empty a similarity group or delete a pinned file even if a stale page asks it to.
 Every removal is appended to `runs/<dataset-slug>/deleted.log`.
+
+![Delete confirmation listing two files and 810 KB](docs/screenshots/desktop-delete.png)
+
+*Bulk deletion asks once, lists the affected paths and the total size, and says plainly that `os.remove` has no trash and no undo. The server checks pins and the group invariant again before removing anything.*
 
 **Cached data.** Scan results, pins, thumbnails (400 px) and previews (1280 px)
 live under `runs/<dataset-slug>/` and are gitignored. A folder that has been
@@ -453,9 +513,9 @@ python3 -m unittest test_similar_image_remover -v
 python3 test_similar_image_remover.py
 ```
 
-103 tests run. The four `TestIntegration` cases skip, because `test_images/` is
-gitignored and the `create_test_images.py` generator was removed from the repository.
-`OK (skipped=4)` is the expected result, not a failure. The web tests start a real
+The suite collects 103 tests. The four `TestIntegration` cases skip because
+`test_images/` is gitignored and the `create_test_images.py` generator was removed
+from the repository. `OK (skipped=4)` is the expected result, not a failure. The web tests start a real
 server on a free loopback port and cover Basic Auth, path traversal, the dataset
 picker, folder browsing and counts, HEIC/AVIF support, mkdir, proxy/mobile client
 classification, the native picker endpoint, a scan, pinning, deletion invariants
@@ -465,37 +525,37 @@ and the thumbnail/preview cache.
 
 ```bash
 # Preview exact duplicates (100% identical) with default hashes
-python similar_image_remover.py -d ./photos --threshold 1.0
+python3 similar_image_remover.py -d ./photos --threshold 1.0
 
 # Find near-duplicates using dhash (good for detecting edited images)
-python similar_image_remover.py -d ./photos --hash-method dhash --threshold 0.90
+python3 similar_image_remover.py -d ./photos --hash-method dhash --threshold 0.90
 
 # High accuracy mode: crop_resistant + ORB verification
-python similar_image_remover.py -d ./photos --hash-method crop_resistant --verify-orb --threshold 0.85
+python3 similar_image_remover.py -d ./photos --hash-method crop_resistant --verify-orb --threshold 0.85
 
 # Multiple hash methods for better detection
-python similar_image_remover.py -d ./photos --hash-method dhash --hash-method whash --threshold 0.88
+python3 similar_image_remover.py -d ./photos --hash-method dhash --hash-method whash --threshold 0.88
 
 # Find and delete exact duplicates with confirmation
-python similar_image_remover.py -d ./photos --threshold 1.0 --delete
+python3 similar_image_remover.py -d ./photos --threshold 1.0 --delete
 
 # Strict ORB mode (fewer false positives)
-python similar_image_remover.py -d ./photos --verify-orb --orb-min-matches 25 --threshold 0.90
+python3 similar_image_remover.py -d ./photos --verify-orb --orb-min-matches 25 --threshold 0.90
 
 # Delete with confirmation prompt (shows images, then asks)
-python similar_image_remover.py -d ./photos --threshold 0.95 --delete
+python3 similar_image_remover.py -d ./photos --threshold 0.95 --delete
 
 # Delete without confirmation (for automation/scripts)
-python similar_image_remover.py -d ./photos --threshold 0.95 --delete --force
+python3 similar_image_remover.py -d ./photos --threshold 0.95 --delete --force
 
 # Same but with short flags
-python similar_image_remover.py -d ./photos --threshold 0.95 --delete -y
+python3 similar_image_remover.py -d ./photos --threshold 0.95 --delete -y
 
 # Fast mode for large datasets (ahash only)
-python similar_image_remover.py -d ./photos --hash-method ahash --threshold 0.85
+python3 similar_image_remover.py -d ./photos --hash-method ahash --threshold 0.85
 
 # Maximum accuracy mode (slowest)
-python similar_image_remover.py -d ./photos --hash-method crop_resistant --verify-orb --threshold 0.80 -v
+python3 similar_image_remover.py -d ./photos --hash-method crop_resistant --verify-orb --threshold 0.80 -v
 ```
 
 ## Troubleshooting False Positives
