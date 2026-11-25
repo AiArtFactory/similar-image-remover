@@ -398,7 +398,7 @@ python3 -m unittest test_similar_image_remover -v
 python3 test_similar_image_remover.py
 ```
 
-78 tests run. The four `TestIntegration` cases skip, because `test_images/` is
+79 tests run. The four `TestIntegration` cases skip, because `test_images/` is
 gitignored and the `create_test_images.py` generator was removed from the repository.
 `OK (skipped=4)` is the expected result, not a failure. The web tests start a real
 server on a free loopback port and cover Basic Auth, path traversal, the dataset

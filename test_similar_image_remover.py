@@ -1022,6 +1022,23 @@ class TestWebHelpers(unittest.TestCase):
         self.assertIsNone(error)
         self.assertAlmostEqual(config["pair_floor"], 0.30)
 
+    def test_build_results_keeps_the_same_winner_across_calls(self):
+        """A blank seed is fixed at scan time; reloading must not re-roll it."""
+        from web import server as web
+
+        tie = self.directory / "tie.png"
+        Image.new("RGB", (240, 240), (9, 9, 9)).save(tie)
+        state = self._state(
+            [["large.png", "tie.png", 1.0], ["large.png", "small.png", 0.95]]
+        )
+        state["resolutions"]["tie.png"] = [240, 240]
+        state["sizes"]["tie.png"] = 1000
+
+        first = web.build_results(self.directory, state, 0.90)
+        second = web.build_results(self.directory, state, 0.90)
+        self.assertEqual(first["groups"][0]["keep"], second["groups"][0]["keep"])
+        self.assertTrue(first["groups"][0]["tie"])
+
     def test_build_results_uses_the_states_own_floor(self):
         from web import server as web
 

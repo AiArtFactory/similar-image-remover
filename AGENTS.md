@@ -38,7 +38,7 @@ python3 test_similar_image_remover.py            # equivalent, also works
 ```
 
 - `test_images/` is gitignored and absent, and its generator (`create_test_images.py`)
-  was deleted in 862e056, so the four `TestIntegration` tests skip. 74 of 78 run.
+  was deleted in 862e056, so the four `TestIntegration` tests skip. 75 of 79 run.
   Skipped is the expected state, not a regression.
 - `TestWebServer` starts a real server on a free loopback port, overrides
   `web.server.RUNS_ROOT` with a temp dir, and polls `/api/state` until the scan
