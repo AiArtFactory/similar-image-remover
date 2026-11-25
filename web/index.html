@@ -51,11 +51,87 @@
     #status { display: none; }
   }
 
-  #folderbar { display: none; gap: 8px; padding: 10px 12px; background: var(--panel2);
-               border-bottom: 1px solid var(--line); align-items: center; }
-  #folderbar.show { display: flex; }
-  #folderbar input { flex: 1; }
-  #folderbar .hint { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  /* --- folder picker ----------------------------------------------------- */
+  .folder-overlay { position: fixed; inset: 0; z-index: 55; display: none;
+                    background: #000c; align-items: center; justify-content: center;
+                    padding: 16px; }
+  .folder-overlay.show { display: flex; }
+  .folder-sheet { width: min(880px, 100%); height: min(90vh, 820px); display: flex;
+                  flex-direction: column; overflow: hidden; background: var(--panel);
+                  border: 1px solid var(--line); border-radius: 12px;
+                  box-shadow: 0 24px 70px #000b; }
+  .folder-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+                 background: var(--panel2); border-bottom: 1px solid var(--line); }
+  .folder-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .folder-title .sub { display: block; color: var(--dim); font-size: 11px;
+                       font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+  .folder-sub { display: flex; gap: 8px; align-items: center; padding: 9px 12px 0; }
+  .folder-sub input[type="search"] { flex: 1; min-width: 0; background: var(--panel2);
+                                     color: var(--txt); border: 1px solid var(--line);
+                                     border-radius: 5px; padding: 6px 9px; font-size: 12px; }
+  .toggle { display: flex; align-items: center; gap: 5px; color: var(--dim);
+            font-size: 11px; white-space: nowrap; }
+  .crumbs { display: flex; flex-wrap: wrap; gap: 1px; padding: 7px 12px 2px;
+            font-size: 11px; color: var(--dim); }
+  .crumb { background: none; border: 0; color: var(--accent); padding: 1px 3px;
+           font-size: 11px; cursor: pointer; border-radius: 3px; }
+  .crumb:hover { background: #263148; }
+  .crumb-sep { color: #4b5563; }
+  .folder-pathrow { display: flex; gap: 6px; align-items: center; padding: 2px 12px 7px; }
+  .folder-pathrow span { color: var(--dim); font-size: 11px; }
+  .folder-pathrow input { flex: 1; min-width: 0; font-size: 11px; }
+  .places { display: flex; gap: 6px; align-items: center; padding: 0 12px 7px;
+            overflow-x: auto; white-space: nowrap; }
+  .places .head { color: var(--dim); font-size: 10px; text-transform: uppercase;
+                  letter-spacing: .06em; flex: none; }
+  .chip { flex: none; padding: 3px 8px; font-size: 11px; border-radius: 999px;
+          border: 1px solid var(--line); background: var(--panel2); color: var(--txt); }
+  .chip:hover { background: #2a3345; }
+  .chip.current { border-color: var(--accent); color: #bfdbfe; }
+  .folder-summary { margin: 0 12px 7px; padding: 7px 9px; background: var(--panel2);
+                    border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+  .folder-summary b { color: var(--txt); }
+  .folder-summary .fmt { color: var(--dim); }
+  .folder-summary .warn { color: var(--warn); }
+  .folder-list { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line);
+                 display: flex; flex-direction: column; }
+  .folder-row { display: flex; width: 100%; align-items: center; gap: 10px;
+                padding: 10px 14px; background: transparent; border: 0;
+                border-bottom: 1px solid #232830; color: var(--txt); text-align: left;
+                font: inherit; font-size: 13px; cursor: pointer; }
+  .folder-row:hover, .folder-row:focus-visible { background: #232833; outline: 0; }
+  .folder-row .ficon { width: 18px; text-align: center; color: var(--accent); flex: none; }
+  .folder-row .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                       white-space: nowrap; }
+  .folder-row .fcount { color: var(--dim); font-size: 11px; flex: none; }
+  .folder-row .fchev { color: #556070; flex: none; }
+  .folder-message { padding: 20px 16px; text-align: center; color: var(--dim);
+                    margin: auto; }
+  .folder-loading { padding: 12px 14px; color: var(--dim); font-size: 12px; }
+  .folder-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+                 padding: 8px 12px; background: var(--panel2); border-top: 1px solid var(--line); }
+  .folder-foot .hint { color: var(--dim); font-size: 10px; }
+  .new-folder-row { display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+                    border-top: 1px solid var(--line); background: #1a1e24; }
+  .new-folder-row[hidden] { display: none; }
+  .new-folder-row input { flex: 1; min-width: 0; }
+  @media (max-width: 700px) {
+    .folder-overlay { padding: 0; }
+    .folder-sheet { width: 100%; height: 100dvh; border-radius: 0; border: 0; }
+    #browseFoldersBtn { display: none; }
+    /* A one-column grid makes each portrait photo taller than the phone.
+       Two compact square tiles are easier to scan and compare. */
+    .tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+             gap: 8px; padding: 8px; }
+    .thumbwrap { aspect-ratio: 1 / 1; }
+    .meta { padding: 5px 6px 1px; }
+    .meta .name { font-size: 11px; }
+    .meta .sub { font-size: 10px; }
+    .tilebar { gap: 4px; padding: 4px 6px 6px; }
+    .tilebar .sel { font-size: 10px; }
+    .tilebar .icon { font-size: 10px; padding: 2px 4px; }
+  }
 
   #banner { display: none; margin: 10px 12px 0; padding: 8px 11px; border-radius: 6px;
             background: #1f2a44; color: #cbd5e1; border: 1px solid var(--line);
@@ -103,6 +179,9 @@
   #empty.show { display: block; }
   #empty h2 { color: var(--txt); font-size: 16px; margin-bottom: 6px; }
   #empty p { max-width: 540px; margin: 8px auto; }
+  #empty .actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+                    margin-top: 16px; }
+  #empty .hint { font-size: 11px; }
 
   #scanbar { display: none; margin: 0 0 10px; padding: 9px 11px; border-radius: 7px;
              background: var(--panel); border: 1px solid var(--line); }
@@ -213,18 +292,12 @@
 <header>
   <h1>Similar Image Remover</h1>
   <div id="dsname"><b>No dataset</b></div>
-  <button id="changeFolderBtn" class="small">Change folder</button>
+  <button id="changeFolderBtn" class="small">Choose folder</button>
+  <button id="browseFoldersBtn" class="small" title="Browse folders on the server">📁</button>
   <button id="settingsBtn" class="small">Settings</button>
   <span class="grow"></span>
   <div id="status">connecting…</div>
 </header>
-
-<div id="folderbar">
-  <input id="folderInput" type="text" spellcheck="false" autocomplete="off"
-         placeholder="Paste the folder to process, e.g. /path/to/images" />
-  <button id="openFolderBtn" class="primary">Open folder</button>
-  <span class="hint">~ is expanded · the folder can be changed at any time</span>
-</div>
 
 <div id="banner"></div>
 
@@ -287,8 +360,14 @@
   <section id="content">
     <div id="empty">
       <h2>Open a folder of images</h2>
-      <p>Paste an absolute path above. The scan runs in the background and the page
-         fills in as groups are found.</p>
+      <p>Pick a folder on the server. On the machine running the server, the
+         button opens its normal folder dialog; from a phone it opens an
+         in-browser folder browser.</p>
+      <div class="actions">
+        <button id="emptyChooseBtn" class="primary">Choose folder</button>
+        <button id="emptyBrowseBtn" class="small">Browse folders…</button>
+      </div>
+      <p class="hint">You can also paste a path inside the folder browser.</p>
       <p>Deletion is permanent, exactly like the CLI. Pin anything you want to keep.</p>
     </div>
 
@@ -326,6 +405,55 @@
 </div>
 
 <div id="toasts"></div>
+
+<div id="folderOverlay" class="folder-overlay">
+  <div class="folder-sheet" role="dialog" aria-modal="true" aria-labelledby="folderTitle">
+    <div class="folder-head">
+      <button id="folderBack" class="small" disabled>‹ Back</button>
+      <div class="folder-title">
+        <span id="folderTitle">Folder</span>
+        <span id="folderHiddenTag" class="tag" hidden>hidden</span>
+        <span class="sub" id="folderSubtitle"></span>
+      </div>
+      <button id="folderSelect" class="primary">Select</button>
+      <button id="folderClose" class="small" title="Close">✕</button>
+    </div>
+
+    <div class="folder-sub">
+      <input id="folderSearch" type="search" placeholder="Search folders…" />
+      <label class="toggle"><input id="folderShowHidden" type="checkbox" /> Show hidden</label>
+    </div>
+
+    <div id="folderCrumbs" class="crumbs"></div>
+
+    <div class="folder-pathrow">
+      <span>Path</span>
+      <input id="folderPathInput" type="text" spellcheck="false" autocomplete="off"
+             placeholder="Paste a folder path and press Go" />
+      <button id="folderGo" class="small">Go</button>
+    </div>
+
+    <div id="folderPlaces" class="places"></div>
+    <div id="folderSummary" class="folder-summary"></div>
+    <div id="folderMessage" class="folder-message" hidden></div>
+    <div id="folderLoading" class="folder-loading" hidden>Loading folders…</div>
+    <div id="folderList" class="folder-list"></div>
+
+    <div id="folderNewRow" class="new-folder-row" hidden>
+      <input id="folderNewName" type="text" placeholder="New folder name" />
+      <button id="folderNewCreate" class="primary small">Create</button>
+      <button id="folderNewCancel" class="small">Cancel</button>
+    </div>
+
+    <div class="folder-foot">
+      <button id="folderNewBtn" class="small">＋ New folder</button>
+      <button id="folderNativeBtn" class="small" hidden>Open Finder…</button>
+      <span class="grow"></span>
+      <span id="folderFootHint" class="hint">Counts include hidden subfolders</span>
+      <button id="folderSelect2" class="primary small">Select this folder</button>
+    </div>
+  </div>
+</div>
 
 <div id="overlay">
   <div class="card" id="modalCard" style="display:none">
@@ -383,6 +511,16 @@
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
   };
 
+  const FORMAT_LABELS = {
+    jpg: "JPG", jpeg: "JPEG", png: "PNG", webp: "WebP", avif: "AVIF",
+    heic: "HEIC", heif: "HEIF", gif: "GIF", tif: "TIFF", tiff: "TIFF",
+    bmp: "BMP", jfif: "JFIF", jpe: "JPE", ico: "ICO",
+  };
+  const formatLabel = (extension) => {
+    const key = String(extension || "").replace(".", "").toLowerCase();
+    return FORMAT_LABELS[key] || key.toUpperCase();
+  };
+
   let serverState = null;
   let results = null;
   let selected = new Set();
@@ -399,6 +537,15 @@
   let lightboxArmed = false;
   let lightboxTimer = null;
   let modalConfirmHandler = null;
+
+  let clientContext = null;
+  let folderRequest = 0;
+  let folderState = {
+    current: null, parent: null, breadcrumbs: [], entries: [], counts: null,
+    shortcuts: [], recent: [], showHidden: false, canCreate: false,
+    entriesTruncated: false, loading: false,
+  };
+  let nativeBusy = false;
 
   // ---------------------------------------------------------------- API
   async function api(path, body) {
@@ -568,7 +715,6 @@
       }
       $("empty").classList.remove("show");
       $("toolbar").hidden = false;
-      $("folderInput").value = ds.path;
     } else {
       currentSlug = null;
       $("dsname").innerHTML = "<b>No dataset</b>";
@@ -579,7 +725,6 @@
       results = null;
       selected.clear();
       updateBulkBar();
-      showFolderBar(true);
     }
   }
 
@@ -597,9 +742,327 @@
     } catch (_) { /* private mode */ }
   }
 
-  function showFolderBar(show) {
-    $("folderbar").classList.toggle("show", !!show);
-    if (show) setTimeout(() => $("folderInput").focus(), 30);
+  // --------------------------------------------------------- folder picker
+  function baseName(path) {
+    const parts = String(path || "").split(/[\\/]+/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : String(path || "");
+  }
+
+  function setFolderMessage(message, kind = "") {
+    const el = $("folderMessage");
+    el.textContent = message || "";
+    el.hidden = !message;
+    el.style.color = kind === "err" ? "var(--bad)" : "var(--dim)";
+  }
+
+  async function ensureClientContext() {
+    if (clientContext) return clientContext;
+    try {
+      clientContext = await api("api/client");
+    } catch (_) {
+      clientContext = { local: false, native_picker: { available: false } };
+    }
+    return clientContext;
+  }
+
+  async function openFolderBrowser(startPath) {
+    await ensureClientContext();
+    $("folderOverlay").classList.add("show");
+    $("folderNewRow").hidden = true;
+    $("folderNewName").value = "";
+    $("folderSearch").value = "";
+    folderState.showHidden = localStorage.getItem("sir.showHidden") === "1";
+    $("folderShowHidden").checked = folderState.showHidden;
+    const initial =
+      startPath ||
+      (serverState && serverState.dataset && serverState.dataset.path) ||
+      (clientContext && clientContext.home) ||
+      "";
+    await browseTo(initial);
+  }
+
+  function closeFolderBrowser() {
+    $("folderOverlay").classList.remove("show");
+  }
+
+  async function browseTo(path) {
+    const target = String(path || "").trim();
+    if (!target) {
+      setFolderMessage("Enter a folder path.", "err");
+      return;
+    }
+    const token = ++folderRequest;
+    folderState.loading = true;
+    $("folderLoading").hidden = false;
+    setFolderMessage("");
+    try {
+      const data = await api(
+        `api/browse?path=${encodeURIComponent(target)}&show_hidden=${folderState.showHidden ? 1 : 0}`
+      );
+      // A fast second navigation must not be overwritten by the first response.
+      if (token !== folderRequest) return;
+      folderState.current = data.path;
+      folderState.parent = data.parent;
+      folderState.breadcrumbs = data.breadcrumbs || [];
+      folderState.entries = data.entries || [];
+      folderState.counts = data.counts || { total: 0, by_ext: {}, truncated: false };
+      folderState.shortcuts = data.shortcuts || [];
+      folderState.recent = data.recent || [];
+      folderState.canCreate = !!data.can_create;
+      folderState.entriesTruncated = !!data.entries_truncated;
+      if (data.client) clientContext = { ...(clientContext || {}), ...data.client };
+      renderFolder();
+    } catch (err) {
+      if (token !== folderRequest) return;
+      setFolderMessage(errorText(err), "err");
+    } finally {
+      if (token === folderRequest) {
+        folderState.loading = false;
+        $("folderLoading").hidden = true;
+      }
+    }
+  }
+
+  function renderFolder() {
+    const current = folderState.current;
+    $("folderTitle").textContent = current ? baseName(current) : "Folder";
+    $("folderSubtitle").textContent = current || "";
+    $("folderHiddenTag").hidden = !(current && baseName(current).startsWith("."));
+    $("folderBack").disabled = !folderState.parent;
+    // Do not stomp on a path the user started typing while the listing loaded.
+    if (document.activeElement !== $("folderPathInput")) {
+      $("folderPathInput").value = current || "";
+    }
+    $("folderSelect").disabled = !current;
+    $("folderSelect2").disabled = !current;
+    $("folderNewBtn").disabled = !folderState.canCreate;
+
+    renderCrumbs();
+    renderPlaces();
+    renderFolderSummary();
+    renderEntries();
+
+    const native = clientContext && clientContext.native_picker;
+    const nativeButton = $("folderNativeBtn");
+    if (native && native.available && clientContext.local) {
+      nativeButton.hidden = false;
+      nativeButton.textContent = native.label || "Open folder dialog…";
+    } else {
+      nativeButton.hidden = true;
+    }
+
+    if (clientContext && !clientContext.local) {
+      $("folderFootHint").textContent = "Native dialog is only on the server machine";
+    } else if (native && !native.available && native.reason) {
+      $("folderFootHint").textContent = native.reason;
+    } else {
+      $("folderFootHint").textContent = "Counts include hidden subfolders";
+    }
+  }
+
+  function renderCrumbs() {
+    const container = $("folderCrumbs");
+    container.replaceChildren();
+    const crumbs = folderState.breadcrumbs || [];
+    crumbs.forEach((crumb, index) => {
+      if (index) {
+        const separator = document.createElement("span");
+        separator.className = "crumb-sep";
+        separator.textContent = "/";
+        container.appendChild(separator);
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "crumb";
+      button.textContent = crumb.name || crumb.path;
+      button.title = crumb.path;
+      button.addEventListener("click", () => browseTo(crumb.path));
+      container.appendChild(button);
+    });
+  }
+
+  function renderPlaces() {
+    const container = $("folderPlaces");
+    container.replaceChildren();
+    const places = [];
+    const seen = new Set();
+    const add = (name, path) => {
+      if (!path || seen.has(path)) return;
+      seen.add(path);
+      places.push({ name, path });
+    };
+    for (const place of folderState.shortcuts || []) add(place.name, place.path);
+    for (const path of folderState.recent || []) add(baseName(path) || path, path);
+    if (!places.length) return;
+
+    const head = document.createElement("span");
+    head.className = "head";
+    head.textContent = "Places";
+    container.appendChild(head);
+    for (const place of places) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip" + (place.path === folderState.current ? " current" : "");
+      chip.textContent = place.name;
+      chip.title = place.path;
+      chip.addEventListener("click", () => browseTo(place.path));
+      container.appendChild(chip);
+    }
+  }
+
+  function renderFolderSummary() {
+    const el = $("folderSummary");
+    const counts = folderState.counts || { total: 0, by_ext: {}, truncated: false };
+    if (!folderState.current) {
+      el.textContent = "";
+      return;
+    }
+    const formats = Object.entries(counts.by_ext || {}).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+    );
+    const visible = formats.slice(0, 6).map(
+      ([extension, count]) => `${formatLabel(extension)} ${count}`
+    );
+    const other = formats.slice(6).reduce((sum, pair) => sum + pair[1], 0);
+    let line;
+    if (counts.total) {
+      const total = counts.truncated ? `${counts.total}+` : String(counts.total);
+      line = `<b>${total}</b> image${counts.total === 1 ? "" : "s"} here and below`;
+      if (visible.length) {
+        line += ` <span class="fmt">· ${visible.join(" · ")}${other ? ` · Other ${other}` : ""}</span>`;
+      }
+      if (counts.truncated) line += ' <span class="warn">(stopped counting early)</span>';
+    } else {
+      line = "No supported image files here or below.";
+    }
+    el.innerHTML = line;
+    el.title =
+      formats.map(([extension, count]) => `${formatLabel(extension)} ${count}`).join(" · ") +
+      "\nRecursive count, including hidden subfolders as the scan does.";
+  }
+
+  function renderEntries() {
+    const container = $("folderList");
+    container.replaceChildren();
+    if (!folderState.current) {
+      const empty = document.createElement("div");
+      empty.className = "folder-message";
+      empty.textContent = "Choose a folder to start.";
+      container.appendChild(empty);
+      return;
+    }
+    const rawQuery = $("folderSearch").value.trim();
+    const query = rawQuery.toLowerCase();
+    const entries = (folderState.entries || []).filter(
+      (entry) => !query || entry.name.toLowerCase().includes(query)
+    );
+    if (folderState.entriesTruncated) {
+      const note = document.createElement("div");
+      note.className = "folder-loading";
+      note.textContent = "Showing the first 1,000 folders.";
+      container.appendChild(note);
+    }
+    if (!entries.length) {
+      const empty = document.createElement("div");
+      empty.className = "folder-message";
+      empty.textContent = rawQuery
+        ? `No folders match “${rawQuery}”.`
+        : "No folders here. You can still select this folder.";
+      container.appendChild(empty);
+      return;
+    }
+    for (const entry of entries) {
+      const direct = entry.direct_images || 0;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "folder-row";
+      row.title = direct
+        ? `${direct} image file${direct === 1 ? "" : "s"} directly in this folder` +
+          (entry.direct_truncated ? " (count stopped early)" : "")
+        : "No image files directly in this folder";
+      row.innerHTML = `
+        <span class="ficon">${entry.symlink ? "🔗" : "📁"}</span>
+        <span class="fname">${esc(entry.name)}</span>
+        <span class="fcount">${direct ? esc(entry.direct_truncated ? `${direct}+` : String(direct)) + " img" : "—"}</span>
+        <span class="fchev">›</span>`;
+      row.addEventListener("click", () => browseTo(entry.path));
+      container.appendChild(row);
+    }
+  }
+
+  async function selectCurrentFolder() {
+    if (!folderState.current) return;
+    const opened = await openFolder(folderState.current);
+    if (opened) closeFolderBrowser();
+  }
+
+  function showNewFolderRow(show) {
+    $("folderNewRow").hidden = !show;
+    if (show) {
+      $("folderNewName").value = "";
+      $("folderNewName").focus();
+    }
+  }
+
+  async function createFolder() {
+    const name = $("folderNewName").value.trim();
+    if (!name) {
+      $("folderNewName").focus();
+      return;
+    }
+    try {
+      const result = await api("api/mkdir", { parent: folderState.current, name });
+      showNewFolderRow(false);
+      toast(`Created ${result.path}`, "ok");
+      await browseTo(result.path);
+    } catch (err) {
+      setFolderMessage(errorText(err), "err");
+    }
+  }
+
+  async function chooseFolder() {
+    await ensureClientContext();
+    if (clientContext.local && clientContext.native_picker && clientContext.native_picker.available) {
+      await pickNativeFolder();
+    } else {
+      await openFolderBrowser();
+    }
+  }
+
+  async function pickNativeFolder(startPath) {
+    if (nativeBusy) return;
+    await ensureClientContext();
+    const native = clientContext && clientContext.native_picker;
+    if (!native || !native.available) {
+      await openFolderBrowser(startPath);
+      return;
+    }
+    nativeBusy = true;
+    const previousStatus = $("status").textContent;
+    $("status").textContent = "waiting for folder dialog…";
+    toast("A folder dialog opened on the server. If you don't see it, check behind this window.");
+    try {
+      const result = await api("api/pick-folder", {
+        start:
+          startPath ||
+          (serverState && serverState.dataset && serverState.dataset.path) ||
+          "",
+      });
+      if (result.path) {
+        await openFolder(result.path);
+      } else if (result.cancelled) {
+        toast("Folder selection cancelled.");
+      } else {
+        toast(result.error || "Could not open the native folder dialog.", "err");
+        await openFolderBrowser(startPath);
+      }
+    } catch (err) {
+      toast(errorText(err), "err");
+      await openFolderBrowser(startPath);
+    } finally {
+      nativeBusy = false;
+      $("status").textContent = previousStatus;
+    }
   }
 
   // ------------------------------------------------------------ results
@@ -607,7 +1070,7 @@
     if (!serverState || !serverState.dataset) return;
     const y = window.scrollY;
     try {
-      const data = await api(`/api/results?threshold=${encodeURIComponent(threshold)}`);
+      const data = await api(`api/results?threshold=${encodeURIComponent(threshold)}`);
       results = data;
       selected = new Set();
       for (const group of data.groups) {
@@ -717,7 +1180,7 @@
 
     el.innerHTML = `
       <div class="thumbwrap" data-preview="${esc(path)}" title="Click for a large preview">
-        <img src="/thumb/${encodePath(path)}" alt="${esc(path)}" loading="lazy" />
+        <img src="thumb/${encodePath(path)}" alt="${esc(path)}" loading="lazy" />
         ${keep ? '<span class="badge keep">KEEP</span>' : ""}
         ${pinned ? '<span class="badge pin">PINNED</span>' : ""}
         <span class="badge sim">${fmtPct(similarity)}</span>
@@ -824,7 +1287,7 @@
     const group = results.groups[groupIndex];
     const willPin = !(group.protected || []).includes(path);
     try {
-      const reply = await api("/api/protect", { path, protected: willPin });
+      const reply = await api("api/protect", { path, protected: willPin });
       results.protected = reply.protected || [];
       group.protected = (group.protected || []).filter((p) => p !== path);
       if (willPin) group.protected.push(path);
@@ -922,7 +1385,7 @@
     deleting = true;
     $("bulkDeleteBtn").disabled = true;
     try {
-      const reply = await api("/api/delete", { paths, threshold });
+      const reply = await api("api/delete", { paths, threshold });
       const count = (reply.deleted || []).length;
       toast(`Deleted ${count} file${count === 1 ? "" : "s"}.`, "ok");
       if ((reply.missing || []).length) {
@@ -956,13 +1419,13 @@
       (group.tie ? " · resolution tie" : "");
 
     const img = $("lbimg");
-    img.src = `/thumb/${encodePath(path)}`;
+    img.src = `thumb/${encodePath(path)}`;
     const preview = new Image();
     preview.onload = () => {
       if (lightboxPath === path) img.src = preview.src;
     };
-    preview.src = `/preview/${encodePath(path)}`;
-    $("lbOriginal").href = `/image/${encodePath(path)}`;
+    preview.src = `preview/${encodePath(path)}`;
+    $("lbOriginal").href = `image/${encodePath(path)}`;
 
     const badges = [];
     if (path === group.keep) badges.push('<span class="pill keep">KEEP</span>');
@@ -1070,7 +1533,7 @@
     const wasRunning = isRunning(serverState && serverState.job);
     let next;
     try {
-      next = await api("/api/state");
+      next = await api("api/state");
     } catch (err) {
       banner(errorText(err), "err");
       return;
@@ -1105,15 +1568,15 @@
 
   async function startScan() {
     if (!serverState || !serverState.dataset) {
-      showFolderBar(true);
-      toast("Open a folder first.", "err");
+      toast("Choose a folder first.", "err");
+      await chooseFolder();
       return;
     }
     const config = readConfig();
     if (!config) return;
     hideBanner();
     try {
-      const reply = await api("/api/scan", config);
+      const reply = await api("api/scan", config);
       serverState.job = reply.job;
       serverState.config = reply.config;
       pendingScanSignature = signature(config);
@@ -1129,7 +1592,7 @@
 
   async function cancelScan() {
     try {
-      const reply = await api("/api/cancel", {});
+      const reply = await api("api/cancel", {});
       serverState.job = reply.job;
       pendingScanSignature = null;
       stopPolling();
@@ -1144,9 +1607,9 @@
   async function openFolder(rawPath) {
     const path = String(rawPath || "").trim();
     if (!path) {
-      toast("Enter a folder path.", "err");
-      $("folderInput").focus();
-      return;
+      toast("Choose a folder first.", "err");
+      if ($("folderOverlay").classList.contains("show")) $("folderPathInput").focus();
+      return false;
     }
     stopPolling();
     hideBanner();
@@ -1154,7 +1617,7 @@
       const config = readConfig();
       const payload = { path };
       if (config) payload.config = config;
-      const next = await api("/api/dataset", payload);
+      const next = await api("api/dataset", payload);
       serverState = next;
       applyDataset(next);
       populateSettings(next.config);
@@ -1163,7 +1626,7 @@
       selected.clear();
       $("groups").replaceChildren();
       updateBulkBar();
-      showFolderBar(false);
+      closeFolderBrowser();
       if (next.has_results) {
         await loadResults();
       } else {
@@ -1171,8 +1634,12 @@
       }
       renderJob(next.job);
       if (isRunning(next.job)) schedulePoll();
+      return true;
     } catch (err) {
-      banner(errorText(err), "err");
+      const message = errorText(err);
+      banner(message, "err");
+      if ($("folderOverlay").classList.contains("show")) setFolderMessage(message, "err");
+      return false;
     }
   }
 
@@ -1198,18 +1665,44 @@
   }, 260);
 
   function bind() {
-    $("changeFolderBtn").addEventListener("click", () => {
-      const shown = $("folderbar").classList.contains("show");
-      showFolderBar(!shown);
-    });
+    $("changeFolderBtn").addEventListener("click", chooseFolder);
+    $("browseFoldersBtn").addEventListener("click", () => openFolderBrowser());
+    $("emptyChooseBtn").addEventListener("click", chooseFolder);
+    $("emptyBrowseBtn").addEventListener("click", () => openFolderBrowser());
     $("settingsBtn").addEventListener("click", () => {
       const panel = $("panel");
       panel.open = true;
       panel.scrollIntoView({ block: "start", behavior: "smooth" });
     });
-    $("openFolderBtn").addEventListener("click", () => openFolder($("folderInput").value));
-    $("folderInput").addEventListener("keydown", (event) => {
-      if (event.key === "Enter") openFolder($("folderInput").value);
+
+    $("folderBack").addEventListener("click", () => {
+      if (folderState.parent) browseTo(folderState.parent);
+    });
+    $("folderClose").addEventListener("click", closeFolderBrowser);
+    $("folderSelect").addEventListener("click", selectCurrentFolder);
+    $("folderSelect2").addEventListener("click", selectCurrentFolder);
+    $("folderGo").addEventListener("click", () => browseTo($("folderPathInput").value));
+    $("folderPathInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") browseTo($("folderPathInput").value);
+    });
+    $("folderSearch").addEventListener("input", renderEntries);
+    $("folderShowHidden").addEventListener("change", () => {
+      folderState.showHidden = $("folderShowHidden").checked;
+      try {
+        localStorage.setItem("sir.showHidden", folderState.showHidden ? "1" : "0");
+      } catch (_) { /* private mode */ }
+      browseTo(folderState.current);
+    });
+    $("folderNewBtn").addEventListener("click", () => showNewFolderRow(true));
+    $("folderNewCancel").addEventListener("click", () => showNewFolderRow(false));
+    $("folderNewCreate").addEventListener("click", createFolder);
+    $("folderNewName").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") createFolder();
+      if (event.key === "Escape") showNewFolderRow(false);
+    });
+    $("folderNativeBtn").addEventListener("click", () => pickNativeFolder(folderState.current));
+    $("folderOverlay").addEventListener("click", (event) => {
+      if (event.target === $("folderOverlay")) closeFolderBrowser();
     });
 
     $("threshold").addEventListener("input", () => {
@@ -1330,7 +1823,8 @@
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
-        if ($("overlay").classList.contains("show")) hideOverlay();
+        if ($("folderOverlay").classList.contains("show")) closeFolderBrowser();
+        else if ($("overlay").classList.contains("show")) hideOverlay();
         else disarmTile();
       }
     });
@@ -1346,7 +1840,8 @@
     }
     if (window.innerWidth < 900) $("panel").open = false;
     try {
-      const state = await api("/api/state");
+      await ensureClientContext();
+      const state = await api("api/state");
       applyDataset(state);
       populateSettings(state.config);
       renderJob(state.job);
@@ -1356,7 +1851,12 @@
         renderStats();
       }
       if (isRunning(state.job)) schedulePoll();
-      if (!state.dataset) showFolderBar(true);
+      if (clientContext && clientContext.local && clientContext.native_picker
+          && clientContext.native_picker.available) {
+        const label = clientContext.native_picker.label || "Choose folder";
+        $("changeFolderBtn").textContent = label;
+        $("emptyChooseBtn").textContent = label;
+      }
       $("status").textContent = state.auth ? "authenticated" : "auth disabled";
     } catch (err) {
       banner(errorText(err), "err");

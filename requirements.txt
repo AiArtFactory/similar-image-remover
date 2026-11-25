@@ -1,6 +1,10 @@
 # Core dependencies
 imagehash>=4.3.0
-pillow>=9.0.0
+# 12.3 is the first line with native AVIF; <13 keeps the existing environment
+# compatible with other tools that still cap Pillow below 13.
+pillow>=12.3.0,<13
+# HEIC/HEIF decoding. 1.9 requires Pillow 13, so hold at the 1.8 line.
+pillow-heif>=1.0.0,<1.9.0
 tqdm>=4.62.0
 
 # For feature-based verification (ORB)

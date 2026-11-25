@@ -38,13 +38,16 @@ python3 test_similar_image_remover.py            # equivalent, also works
 ```
 
 - `test_images/` is gitignored and absent, and its generator (`create_test_images.py`)
-  was deleted in 862e056, so the four `TestIntegration` tests skip. 75 of 79 run.
+  was deleted in 862e056, so the four `TestIntegration` tests skip. 99 of 103 run.
   Skipped is the expected state, not a regression.
 - `TestWebServer` starts a real server on a free loopback port, overrides
   `web.server.RUNS_ROOT` with a temp dir, and polls `/api/state` until the scan
   finishes. It covers 401 challenges, credentials, CSRF refusal, path traversal,
-  dataset switching, results, pinning, deletion invariants, and thumbnail/preview
-  sizes. Keep it hermetic: no live `runs/` writes.
+  dataset switching, results, pinning, deletion invariants, thumbnail/preview
+  sizes, `/api/client`, folder browsing/counts, mkdir, the native-picker endpoint
+  and proxy/mobile classification. `TestFolderPickerHelpers` covers the pure
+  helpers: counts, hidden filtering, forwarded-header parsing, recent folders and
+  native command result handling. Keep it hermetic: no live `runs/` writes.
 - Narrow with `python3 -m unittest test_similar_image_remover.TestResolutionPreference -v`
   or `...TestWebServer -v`.
 
@@ -69,7 +72,19 @@ python3 test_similar_image_remover.py            # equivalent, also works
   wrong survivor on chains.
 - Web state lives in `runs/<dataset-slug>/`: `state.json` (pair graph, config, pins,
   resolutions, sizes), `thumbs/` (400 px), `previews/` (1280 px), `deleted.log`.
-  `runs/` is gitignored. Image keys are dataset-relative POSIX paths.
+  `runs/recent.json` holds the shared recent folders; `runs/` is gitignored.
+  Image keys are dataset-relative POSIX paths.
+- The folder picker is server-side: `GET /api/browse` lists the server's direct
+  child directories, `POST /api/mkdir` creates one, and `POST /api/pick-folder`
+  opens the host's native dialog for a local client. The phone never browses its
+  own files. `client_context()` decides whether the native dialog is allowed.
+- `/api/browse` returns the current folder's recursive image count and per-format
+  breakdown, plus each child's direct image count. Counts use the same extension
+  set as the scanner, stop at 20,000 files / ~1.5 s, and flag truncation.
+- The UI uses **relative** asset/API URLs (`api/state`, `thumb/...`) so a reverse
+  proxy can mount the app under a subpath (for example `/similar/`) and strip it.
+  Do not reintroduce leading slashes; the app still works at `/` and
+  `/index.html`. See `docs/reverse-proxy.md`.
 - The web server is the only writer of its state. `build_results()` filters the cached
   pair graph at the requested threshold (floor 0.5), groups it, and calls
   `select_files_to_keep()`; `validate_deletions()` re-checks every request against the
@@ -82,11 +97,37 @@ python3 test_similar_image_remover.py            # equivalent, also works
 
 ## Gotchas
 
-- **`hash_size` and similarity are coupled.** `hash_similarity()` divides the Hamming
-  distance by the hash's real bit count (`hash.size`), not a fixed 64. The old divisor
-  made every 32×32 near-duplicate score 0.0. `calculate_hashes`/`find_similar_images`
-  default to **8**, while the CLI passes **32**; direct callers silently get different
-  matches unless they pass the value explicitly.
+- **`hash_size` and similarity are coupled.** `hash_similarity()` divides the
+  Hamming distance by the hash's real bit count (`hash.size`), not a fixed 64.
+  The old divisor made every 32×32 near-duplicate score 0.0.
+  `calculate_hashes`/`find_similar_images` default to **8**, while the CLI passes
+  **32**; direct callers silently get different matches unless they pass the value
+  explicitly.
+- **Image formats are centralized.** `supported_image_extensions()` in the core is
+  the one allowlist/registration point, used by both `calculate_hashes` and the
+  folder picker counts. Pillow 12.3+ gives native AVIF; `pillow-heif` registers
+  HEIC/HEIF. The requirements hold Pillow `<13` and pillow-heif `<1.9` because the
+  newer pillow-heif requires Pillow 13, which breaks other tools in this
+  environment. Camera RAW, SVG, PDF and video are intentionally unsupported.
+- **The folder picker is not a file picker.** It lists directories only, never
+  image thumbnails. Counts are by extension, recursive for the current folder and
+  direct for child rows. Hidden dot-directories are hidden unless `show_hidden=1`;
+  the recursive count still includes them because the scan does.
+- **The native dialog is local-only.** `client_context()` allows it only for a
+  non-mobile, effectively-local client. Loopback is a trusted proxy by default;
+  `--trusted-proxy` adds others; forwarded headers from untrusted peers are not
+  trusted. A request with proxy headers but no trusted client IP is remote for the
+  native picker. `--no-native-picker` disables it. The Android emulator's
+  `10.0.2.2` arrives as loopback, so mobile user agents are always remote here.
+- **Do not let a phone pop a dialog on the Mac.** The native endpoint re-checks
+  `client_context`; a remote/mobile/proxied request gets 403. One dialog at a time
+  (`NATIVE_PICKER_LOCK`), 300 s timeout.
+- **New folders are created on the server.** `make_folder()` validates one path
+  segment, rejects separators/`.`/`..`/control characters (and Windows-invalid
+  names), reports collisions, and clears the count cache.
+- **`--no-auth` also exposes the filesystem browser.** The warning says so. Auth
+  is the boundary; there is no path sandbox, because arbitrary paths were already
+  allowed and the feature is meant to reach folders anywhere on the server.
 - **The pair floor is 0.5 by default, not a hard limit.** The web worker caches
   pairs down to the scan's threshold, capped at `PAIR_FLOOR` (0.5), so a 0.9 scan
   still allows instant regrouping down to 0.5, while a scan at 0.3 caches to 0.3.

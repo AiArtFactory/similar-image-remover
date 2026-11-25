@@ -5,7 +5,7 @@ Find and optionally delete similar/duplicate images in a directory using percept
 ## Features
 
 - **Cross-platform**: Works on Windows, macOS, and Linux
-- **Web UI**: Optional local/LAN review page with a grouped thumbnail grid, pinning, per-file deletion and confirmed bulk deletion
+- **Web UI**: Optional local/LAN review page with a folder picker and image counts, an in-page browser of the server's filesystem for phones, a grouped thumbnail grid, pinning, per-file deletion and confirmed bulk deletion
 - **Resolution-aware dedupe**: keeps the copy with the most pixels, and breaks exact ties randomly (visible in the preview, reproducible with `--seed`)
 - **Device detection**: reports CUDA/MPS/ROCm availability, though hashing itself runs on the CPU
 - **Multiple hash methods**: Choose from 7 different perceptual hashing algorithms
@@ -230,9 +230,10 @@ If images don't display:
 
 ## Web UI
 
-The same scan can run as a local web app with a grouped thumbnail grid. It uses
-only the Python standard library for the server, so there is no extra dependency
-and no build step.
+The same scan can run as a local web app with a grouped thumbnail grid. The
+server uses only the Python standard library; there is no web framework and no
+build step. It uses the same Pillow stack as the CLI, plus `pillow-heif` for
+HEIC/HEIF images.
 
 ```bash
 # local machine + LAN, protected by a browser username/password dialog
@@ -272,12 +273,46 @@ assigned. A port that is already taken produces a short "choose another port"
 message and exit code 2. Stopping the server (Ctrl+C, `SIGTERM`, or killing the
 process) releases the port.
 
-**Choosing and switching folders.** `-d` is optional in web mode. With no folder,
-the page opens a path field; paste any absolute path (or a `~` path) and press
-**Open folder**. The current folder can be changed at any time: a running scan is
-cancelled and the new folder is scanned, or its cached results are loaded. There is
-no sandbox — the authenticated user can point the tool at any readable directory,
-which is intentional.
+**Choosing and switching folders.** `-d` is optional in web mode. Click
+**Choose folder**:
+
+- On the machine running the server it opens Finder / Explorer / the Linux
+  folder dialog. Choosing a folder starts the scan immediately; cancelling
+  changes nothing.
+- On a phone or another device it opens an **in-page browser of the server's
+  filesystem**. Tap folders to descend, use the breadcrumbs or Back, or paste a
+  path in the **Path** field and press **Go**. **Select** / **Select this
+  folder** chooses the folder you are viewing. The phone never sees its own
+  storage here; the listing is the server's.
+- The folder list shows **folders only**, never image previews. The current
+  folder shows a recursive image count and a per-format breakdown
+  (`PNG 60 · JPG 8 · JPEG 1 · WebP 2 · HEIC 1`). Each child folder shows how many
+  image files are directly inside it. Counts stop at 20,000 files or about 1.5
+  seconds and say so when they do.
+- **Show hidden** reveals dot-directories. A hidden folder must be revealed
+  before it can be entered or selected. The recursive count includes hidden
+  subfolders, because the scan does.
+- **＋ New folder** creates a directory on the server and enters it.
+- **Places** chips (Home, Desktop, Documents, Downloads, Google Drive, AI,
+  Volumes, drives) and recent folders come from the server and are shared
+  between the desktop and the phone. The browser remembers the show-hidden
+  choice.
+- If the native dialog is unavailable (headless server, no GUI, unsupported
+  platform), the page falls back to the in-page browser. The 📁 button beside
+  **Choose folder** opens the in-page browser even on the desktop.
+
+There is no sandbox: the authenticated user can browse and select any readable
+directory. That is the point of the feature, and why authentication is mandatory
+by default.
+
+**Reverse proxies.** The built-in server is plain HTTP + Basic Auth and has no
+TLS. For HTTPS, a hostname, access from outside the LAN, or a single entry point,
+put Caddy, Nginx, Tailscale Serve, or Cloudflare Tunnel in front, bind the app
+with `--local-only`, and pass `--public-url`. Forwarded headers are trusted only
+from loopback by default; add `--trusted-proxy CIDR` for a proxy elsewhere. The
+native folder dialog is deliberately **not** offered to mobile or proxied
+clients; they use the in-page browser. `--no-native-picker` disables it entirely.
+See [docs/reverse-proxy.md](docs/reverse-proxy.md).
 
 **Settings.** The left panel exposes the same scan settings as the CLI: threshold,
 all seven hash methods (multi-select), hash size, ORB verification and its two
@@ -335,6 +370,9 @@ demand and cached; the grid never downloads full-size originals.
 | `--password` | | Web mode: Basic Auth password (or `SIR_PASSWORD`) | required unless `--no-auth` |
 | `--no-auth` | | Web mode: serve without a login for this run | `False` |
 | `--open` | | Web mode: open the local URL in a browser | `False` |
+| `--trusted-proxy` | | Web mode: proxy CIDR whose forwarded headers may be trusted (repeatable) | loopback only |
+| `--no-native-picker` | | Web mode: never open Finder/Explorer/a dialog on the server | `False` |
+| `--public-url` | | Web mode: external URL to print in the banner | `None` |
 
 ## How It Works
 
@@ -362,12 +400,29 @@ demand and cached; the grid never downloads full-size originals.
 
 ## Supported Image Formats
 
+Formats are read through Pillow 12.3+; HEIC/HEIF use `pillow-heif` (installed
+from `requirements.txt`). The scanner and the folder picker use the same runtime
+extension set, so the counts do not promise a format the scan cannot open.
+
 - PNG (`.png`)
-- JPEG (`.jpg`, `.jpeg`)
+- JPEG (`.jpg`, `.jpeg`, `.jpe`, `.jfif`)
 - GIF (`.gif`)
-- BMP (`.bmp`)
-- TIFF (`.tiff`)
+- BMP / DIB (`.bmp`, `.dib`)
+- TIFF (`.tif`, `.tiff`)
 - WebP (`.webp`)
+- AVIF (`.avif`, native in Pillow 12.3+)
+- HEIC / HEIF (`.heic`, `.heif`, via `pillow-heif`)
+- ICO (`.ico`)
+- TGA (`.tga`)
+- Netpbm (`.ppm`, `.pgm`, `.pbm`, `.pnm`)
+- PCX, SGI, XBM, XPM, WBMP, MSP
+- DDS (`.dds`)
+- Photoshop composite (`.psd`)
+- JPEG 2000 (`.j2k`, `.jp2`)
+- EPS (`.eps`, requires Ghostscript to rasterise)
+
+Not supported: camera RAW (CR2/NEF/ARW/DNG), SVG, PDF and video. Files that
+Pillow cannot decode are skipped with a warning, as before.
 
 ## Safety Features
 
@@ -398,11 +453,13 @@ python3 -m unittest test_similar_image_remover -v
 python3 test_similar_image_remover.py
 ```
 
-79 tests run. The four `TestIntegration` cases skip, because `test_images/` is
+103 tests run. The four `TestIntegration` cases skip, because `test_images/` is
 gitignored and the `create_test_images.py` generator was removed from the repository.
 `OK (skipped=4)` is the expected result, not a failure. The web tests start a real
 server on a free loopback port and cover Basic Auth, path traversal, the dataset
-picker, a scan, pinning, deletion invariants and the thumbnail/preview cache.
+picker, folder browsing and counts, HEIC/AVIF support, mkdir, proxy/mobile client
+classification, the native picker endpoint, a scan, pinning, deletion invariants
+and the thumbnail/preview cache.
 
 ## Examples
 

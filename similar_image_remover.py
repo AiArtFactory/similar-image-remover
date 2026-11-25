@@ -27,9 +27,76 @@ import os
 import sys
 import random
 import argparse
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple, Optional, Union, Any
 from tqdm import tqdm
+
+# Formats worth counting and hashing. The runtime set is intersected with what
+# the installed Pillow can actually decode, so the folder picker cannot promise
+# a format the scanner will silently skip. HEIC/HEIF come from pillow-heif; AVIF
+# is native in Pillow 12+. Camera RAW, SVG, PDF and video are intentionally out
+# of scope: they are not raster images imagehash can compare.
+IMAGE_EXTENSION_ALLOWLIST = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".jpe",
+    ".jfif",
+    ".gif",
+    ".bmp",
+    ".dib",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".avif",
+    ".heic",
+    ".heif",
+    ".ico",
+    ".tga",
+    ".ppm",
+    ".pgm",
+    ".pbm",
+    ".pnm",
+    ".pcx",
+    ".sgi",
+    ".xbm",
+    ".xpm",
+    ".wbmp",
+    ".msp",
+    ".dds",
+    ".psd",
+    ".j2k",
+    ".jp2",
+    ".eps",
+)
+
+
+@lru_cache(maxsize=1)
+def supported_image_extensions() -> Tuple[str, ...]:
+    """Image extensions the installed Pillow can actually open.
+
+    Optional plugins are registered first, so a scan and the folder picker's
+    counts agree. The allowlist keeps Pillow's non-photo plugins (and any future
+    document/video openers) out of a tool whose job is perceptual image hashes.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return tuple(IMAGE_EXTENSION_ALLOWLIST)
+
+    try:
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+    except Exception:  # noqa: BLE001 - optional dependency
+        pass
+
+    registered = Image.registered_extensions()
+    known = tuple(ext for ext in IMAGE_EXTENSION_ALLOWLIST if ext in registered)
+    # If a future Pillow changes its registry shape, still scan the common
+    # formats rather than silently finding nothing.
+    return known or tuple(IMAGE_EXTENSION_ALLOWLIST)
 
 
 def get_device():
@@ -123,8 +190,9 @@ def calculate_hashes(
     hashes = {}
     all_files = []
 
-    # Supported image extensions
-    image_extensions = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp")
+    # Supported image extensions, including formats that need an optional
+    # Pillow plugin (HEIC/HEIF). Shared with the web picker's counts.
+    image_extensions = supported_image_extensions()
 
     # Walk through directory to get the list of all image files
     for dirpath, dirnames, filenames in os.walk(directory):
@@ -1120,6 +1188,26 @@ Examples:
         action="store_true",
         help="Web mode: open the local URL in the default browser after start",
     )
+    parser.add_argument(
+        "--trusted-proxy",
+        action="append",
+        default=[],
+        metavar="CIDR",
+        help="Web mode: address/CIDR of a reverse proxy whose X-Forwarded-* "
+        "headers may be trusted. Loopback is always trusted. Repeatable.",
+    )
+    parser.add_argument(
+        "--no-native-picker",
+        action="store_true",
+        help="Web mode: never open Finder/Explorer/a dialog on this computer; "
+        "use the in-page folder browser",
+    )
+    parser.add_argument(
+        "--public-url",
+        default=None,
+        help="Web mode: external URL to print in the startup banner when this "
+        "server sits behind a reverse proxy",
+    )
 
     global args
     args = parser.parse_args()
@@ -1168,6 +1256,9 @@ Examples:
             password=password,
             auth=not args.no_auth,
             open_browser=args.open_browser,
+            trusted_proxies=args.trusted_proxy,
+            native_picker=not args.no_native_picker,
+            public_url=args.public_url,
             defaults={
                 "threshold": args.threshold,
                 "hash_methods": args.hash_methods or ["ahash", "phash"],

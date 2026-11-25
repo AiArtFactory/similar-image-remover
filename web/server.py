@@ -38,11 +38,13 @@ import base64
 import errno
 import hashlib
 import hmac
+import ipaddress
 import json
 import mimetypes
 import os
 import random
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -115,6 +117,27 @@ JOB = {
 STATES: Dict[str, Dict] = {}  # slug -> dataset state, also on disk
 GENERATION = 0
 
+NATIVE_PICKER_LOCK = threading.Lock()
+NATIVE_PICKER_TIMEOUT = 300
+RECENT_LOCK = threading.Lock()
+COUNT_LOCK = threading.Lock()
+COUNT_CACHE: Dict[Tuple[str, bool], Tuple[float, Dict]] = {}
+COUNT_TTL = 30.0
+COUNT_MAX = 20_000
+COUNT_BUDGET = 1.5
+
+# Headers that mean a request arrived through something in front of this
+# process. They are not trusted unless the immediate peer is a trusted proxy.
+PROXY_HEADERS = (
+    "x-forwarded-for",
+    "x-real-ip",
+    "forwarded",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "tailscale-user-login",
+    "tailscale-user-name",
+)
+
 
 # ---------------------------------------------------------------------------
 # small helpers
@@ -179,6 +202,624 @@ def generation_current(generation: int, dataset: Path) -> bool:
             and CFG.get("dataset") is not None
             and Path(CFG["dataset"]).resolve() == dataset.resolve()
         )
+
+
+# ---------------------------------------------------------------------------
+# folder browsing, image counts, client/proxy detection and native dialogs
+
+
+def _normalize_ip(value) -> Optional[ipaddress._BaseAddress]:
+    if value is None:
+        return None
+    try:
+        address = ipaddress.ip_address(str(value).split("%", 1)[0])
+        if address.version == 6 and address.ipv4_mapped is not None:
+            return address.ipv4_mapped
+        return address
+    except ValueError:
+        return None
+
+
+def _header_value(headers, name: str) -> Optional[str]:
+    """Case-insensitive lookup that also works for plain test dicts."""
+    if headers is None:
+        return None
+    candidates = (
+        name,
+        name.title(),
+        "-".join(part.capitalize() for part in name.split("-")),
+        name.upper(),
+    )
+    for candidate in candidates:
+        value = headers.get(candidate)
+        if value is not None:
+            return value
+    try:
+        for key, value in headers.items():
+            if str(key).lower() == name.lower():
+                return value
+    except Exception:  # noqa: BLE001 - duck-typed headers
+        pass
+    return None
+
+
+def parse_forwarded_ip(headers) -> Optional[ipaddress._BaseAddress]:
+    """Real client IP from X-Forwarded-For / X-Real-IP / Forwarded, leftmost first."""
+    for header in ("x-forwarded-for", "x-real-ip"):
+        raw = _header_value(headers, header)
+        if not raw:
+            continue
+        for part in raw.split(","):
+            candidate = part.strip()
+            if candidate.startswith("["):
+                end = candidate.find("]")
+                candidate = candidate[1:end] if end > 0 else candidate
+            elif candidate.count(":") == 1 and "." in candidate:
+                candidate = candidate.split(":", 1)[0]
+            address = _normalize_ip(candidate)
+            if address is not None:
+                return address
+
+    raw = _header_value(headers, "forwarded")
+    if raw:
+        for entry in raw.split(","):
+            for parameter in entry.split(";"):
+                key, separator, value = parameter.strip().partition("=")
+                if not separator or key.lower() != "for":
+                    continue
+                value = value.strip().strip('"')
+                if value.startswith("["):
+                    end = value.find("]")
+                    value = value[1:end] if end > 0 else value
+                elif value.count(":") == 1 and "." in value:
+                    value = value.split(":", 1)[0]
+                address = _normalize_ip(value)
+                if address is not None:
+                    return address
+    return None
+
+
+def server_lan_ips() -> set[str]:
+    with CFG_LOCK:
+        cached = CFG.get("lan_ips")
+    if cached is None:
+        cached = set(lan_addresses())
+        with CFG_LOCK:
+            CFG["lan_ips"] = cached
+    return cached
+
+
+def is_trusted_proxy(peer_address: str) -> bool:
+    peer = _normalize_ip(peer_address)
+    if peer is None:
+        return False
+    with CFG_LOCK:
+        networks = list(CFG.get("trusted_proxies") or [])
+    return any(peer in network for network in networks)
+
+
+def detect_native_picker() -> Dict:
+    """What native folder dialog this host can offer, if any."""
+    if not CFG.get("native_picker_enabled", True):
+        return {
+            "available": False,
+            "label": "Choose folder",
+            "kind": None,
+            "command": None,
+            "reason": "disabled by --no-native-picker",
+        }
+
+    if sys.platform == "darwin":
+        command = shutil.which("osascript") or "/usr/bin/osascript"
+        if Path(command).exists():
+            return {
+                "available": True,
+                "label": "Open Finder…",
+                "kind": "macos",
+                "command": command,
+                "reason": None,
+            }
+    elif os.name == "nt":
+        for name in ("powershell.exe", "pwsh", "powershell"):
+            command = shutil.which(name)
+            if command:
+                return {
+                    "available": True,
+                    "label": "Open Explorer…",
+                    "kind": "windows",
+                    "command": command,
+                    "reason": None,
+                }
+    else:
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return {
+                "available": False,
+                "label": "Choose folder",
+                "kind": None,
+                "command": None,
+                "reason": "no graphical session on the server",
+            }
+        for name in ("zenity", "kdialog", "yad"):
+            command = shutil.which(name)
+            if command:
+                return {
+                    "available": True,
+                    "label": "Choose folder…",
+                    "kind": name,
+                    "command": command,
+                    "reason": None,
+                }
+
+    return {
+        "available": False,
+        "label": "Choose folder",
+        "kind": None,
+        "command": None,
+        "reason": "no native folder dialog found; use Browse folders…",
+    }
+
+
+def native_picker_info() -> Dict:
+    with CFG_LOCK:
+        cached = CFG.get("native_picker")
+        if cached is not None:
+            return dict(cached)
+    info = detect_native_picker()
+    with CFG_LOCK:
+        CFG["native_picker"] = info
+    return dict(info)
+
+
+def client_context(peer_address: str, headers) -> Dict:
+    """Classify the caller for the native dialog, including proxy chains.
+
+    A phone must not pop Finder on the Mac. The native dialog is offered only
+    when the effective client is the server machine itself, and never when an
+    untrusted proxy or an unresolved proxy hop is in front of the request.
+    """
+    peer = _normalize_ip(peer_address)
+    with CFG_LOCK:
+        networks = list(CFG.get("trusted_proxies") or [])
+    trusted = peer is not None and any(peer in network for network in networks)
+
+    proxy_marker = any(_header_value(headers, name) for name in PROXY_HEADERS)
+    forwarded = parse_forwarded_ip(headers) if trusted else None
+    effective = forwarded or peer
+    user_agent = _header_value(headers, "user-agent") or ""
+    mobile_client = bool(
+        re.search(r"Android|iPhone|iPad|iPod|Mobile", user_agent, re.IGNORECASE)
+    )
+
+    local = False
+    if effective is not None:
+        local = effective.is_loopback or str(effective) in server_lan_ips()
+    # An Android emulator's 10.0.2.2 and some phone NATs arrive as loopback on
+    # the host. A mobile browser is never the machine that can show a native
+    # dialog, so the user agent is the reliable signal for this decision.
+    if mobile_client:
+        local = False
+
+    native_local = local
+    native_reason = None
+    if mobile_client:
+        native_local = False
+        native_reason = "mobile clients use the in-page folder browser"
+    elif proxy_marker and forwarded is None:
+        native_local = False
+        native_reason = (
+            "this request arrived through a proxy; open the page on the "
+            "server itself to use the native folder dialog"
+        )
+
+    info = native_picker_info()
+    available = bool(info["available"] and native_local)
+    if not CFG.get("native_picker_enabled", True):
+        reason = "disabled by --no-native-picker"
+    elif not info["available"]:
+        reason = info.get("reason") or "no native folder dialog found"
+    elif not available:
+        reason = native_reason or "only available on the machine running the server"
+    else:
+        reason = None
+
+    return {
+        "local": local,
+        "client_ip": str(effective) if effective is not None else None,
+        "peer_ip": str(peer) if peer is not None else None,
+        "proxied": proxy_marker,
+        "trusted_proxy": trusted,
+        "native_picker": {**info, "available": available, "reason": reason},
+    }
+
+
+def count_images(
+    root: Path,
+    *,
+    recursive: bool,
+    max_files: int = COUNT_MAX,
+    time_budget: float = COUNT_BUDGET,
+) -> Dict:
+    """Count supported image files, with a cap so a huge tree cannot hang the UI.
+
+    Recursive counts include hidden subdirectories on purpose: that is what the
+    scanner will process after Select. The folder listing hides hidden entries
+    for navigation, but the count must not lie about the scan.
+    """
+    extensions = set(core.supported_image_extensions())
+    by_ext: Dict[str, int] = {}
+    total = 0
+    truncated = False
+    started = time.monotonic()
+    stack = [Path(root)]
+
+    while stack:
+        if time.monotonic() - started > time_budget:
+            truncated = True
+            break
+        directory = stack.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                for entry in iterator:
+                    if total >= max_files or time.monotonic() - started > time_budget:
+                        truncated = True
+                        break
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if recursive:
+                                stack.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=True):
+                            extension = os.path.splitext(entry.name)[1].lower()
+                            if extension in extensions:
+                                total += 1
+                                by_ext[extension] = by_ext.get(extension, 0) + 1
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+        if truncated:
+            break
+
+    return {"total": total, "by_ext": by_ext, "truncated": truncated}
+
+
+def cached_count(path: Path, recursive: bool) -> Dict:
+    key = (str(path), bool(recursive))
+    now = time.monotonic()
+    with COUNT_LOCK:
+        hit = COUNT_CACHE.get(key)
+        if hit is not None and now - hit[0] < COUNT_TTL:
+            return hit[1]
+    result = count_images(
+        path,
+        recursive=recursive,
+        time_budget=COUNT_BUDGET if recursive else min(0.75, COUNT_BUDGET),
+    )
+    with COUNT_LOCK:
+        COUNT_CACHE[key] = (time.monotonic(), result)
+    return result
+
+
+def clear_count_cache() -> None:
+    with COUNT_LOCK:
+        COUNT_CACHE.clear()
+
+
+def resolve_browse_path(raw: str) -> Path:
+    value = str(raw or "").strip()
+    if not value:
+        raise ValueError("empty folder path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    path = path.resolve()
+    if not path.is_dir():
+        raise FileNotFoundError(f"not a directory: {path}")
+    if not os.access(path, os.R_OK | os.X_OK):
+        raise PermissionError(f"cannot read folder: {path}")
+    return path
+
+
+def make_folder(parent: Path, name: str) -> Path:
+    name = str(name or "").strip()
+    if not name or name in (".", ".."):
+        raise ValueError("enter a folder name")
+    if any(separator in name for separator in ("/", "\\")) or "\x00" in name:
+        raise ValueError("a folder name cannot contain a path separator")
+    if any(ord(character) < 32 for character in name):
+        raise ValueError("a folder name cannot contain control characters")
+    if os.name == "nt" and any(character in name for character in '<>:"|?*'):
+        raise ValueError("that character is not allowed in a Windows folder name")
+    if os.name == "nt" and name.endswith((" ", ".")):
+        raise ValueError("Windows folder names cannot end with a space or dot")
+
+    target = parent / name
+    if target.exists():
+        raise FileExistsError(f"a file or folder named {name!r} already exists")
+    target.mkdir(mode=0o755)
+    clear_count_cache()
+    return target.resolve()
+
+
+def _dedupe_places(places: List[Dict]) -> List[Dict]:
+    seen = set()
+    output = []
+    for place in places:
+        try:
+            key = str(Path(place["path"]).resolve())
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append({"name": place["name"], "path": key})
+    return output
+
+
+def build_shortcuts(current: Optional[Path]) -> List[Dict]:
+    home = Path.home()
+    places: List[Dict] = [{"name": "Home", "path": str(home)}]
+    for label in ("Desktop", "Documents", "Downloads"):
+        candidate = home / label
+        if candidate.is_dir():
+            places.append({"name": label, "path": str(candidate)})
+
+    # Google Drive on macOS lives several levels down in CloudStorage; this is
+    # the shortcut that saves the most taps for this tool's usual datasets.
+    cloud_root = home / "Library" / "CloudStorage"
+    if cloud_root.is_dir():
+        try:
+            for drive in sorted(cloud_root.glob("GoogleDrive-*")):
+                if (drive / "My Drive").is_dir():
+                    places.append({"name": "Google Drive", "path": str(drive / "My Drive")})
+                    break
+                if drive.is_dir():
+                    places.append({"name": "Google Drive", "path": str(drive)})
+                    break
+        except OSError:
+            pass
+    legacy_drive = home / "Google Drive"
+    if legacy_drive.is_dir():
+        target = legacy_drive / "My Drive" if (legacy_drive / "My Drive").is_dir() else legacy_drive
+        places.append({"name": "Google Drive", "path": str(target)})
+
+    if (home / "AI").is_dir():
+        places.append({"name": "AI", "path": str(home / "AI")})
+    if Path("/Volumes").is_dir():
+        places.append({"name": "Volumes", "path": "/Volumes"})
+    if os.name == "nt":
+        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive = Path(f"{letter}:\\")
+            if drive.exists():
+                places.append({"name": f"{letter}:", "path": str(drive)})
+
+    with CFG_LOCK:
+        dataset = CFG.get("dataset")
+    if dataset is not None and Path(dataset).is_dir():
+        places.append({"name": "Current dataset", "path": str(dataset)})
+    if current is not None and current.is_dir():
+        places.append({"name": "This folder", "path": str(current)})
+
+    return _dedupe_places(places)
+
+
+def recent_path() -> Path:
+    return RUNS_ROOT / "recent.json"
+
+
+def load_recent() -> List[str]:
+    path = recent_path()
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(raw, list):
+        return []
+    output = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        try:
+            candidate = Path(item).expanduser()
+            if not candidate.is_dir():
+                continue
+            key = str(candidate.resolve())
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(key)
+        if len(output) >= 8:
+            break
+    return output
+
+
+def remember_recent(path: Path) -> None:
+    with RECENT_LOCK:
+        current = load_recent()
+        try:
+            key = str(path.resolve())
+        except OSError:
+            return
+        updated = [key] + [item for item in current if item != key]
+        try:
+            recent_path().parent.mkdir(parents=True, exist_ok=True)
+            tmp = recent_path().with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(updated[:8], indent=2))
+            tmp.replace(recent_path())
+        except OSError:
+            pass
+
+
+def browse_payload(path: Path, show_hidden: bool) -> Dict:
+    entries: List[Dict] = []
+    entries_truncated = False
+    try:
+        with os.scandir(path) as iterator:
+            for entry in iterator:
+                if len(entries) >= 1000:
+                    entries_truncated = True
+                    break
+                if not show_hidden and entry.name.startswith("."):
+                    continue
+                try:
+                    if not entry.is_dir(follow_symlinks=True):
+                        continue
+                    child = Path(entry.path)
+                    direct = cached_count(child, recursive=False)
+                except OSError:
+                    continue
+                entries.append(
+                    {
+                        "name": entry.name,
+                        "path": str(child.resolve()),
+                        "direct_images": direct["total"],
+                        "direct_by_ext": direct["by_ext"],
+                        "direct_truncated": direct["truncated"],
+                        "symlink": entry.is_symlink(),
+                    }
+                )
+    except PermissionError:
+        raise
+    except OSError as exc:
+        raise FileNotFoundError(str(exc))
+
+    entries.sort(key=lambda item: item["name"].casefold())
+
+    crumbs = []
+    cursor = path
+    while True:
+        crumbs.append({"name": cursor.name or str(cursor), "path": str(cursor)})
+        if cursor.parent == cursor:
+            break
+        cursor = cursor.parent
+    crumbs.reverse()
+
+    counts = cached_count(path, recursive=True)
+    return {
+        "path": str(path),
+        "parent": str(path.parent) if path.parent != path else None,
+        "breadcrumbs": crumbs,
+        "entries": entries,
+        "entries_truncated": entries_truncated,
+        "counts": counts,
+        "shortcuts": build_shortcuts(path),
+        "recent": load_recent(),
+        "home": str(Path.home()),
+        "show_hidden": show_hidden,
+        "is_hidden": path.name.startswith("."),
+        "can_create": os.access(path, os.W_OK),
+    }
+
+
+def run_native_picker(start: Path, info: Dict) -> Dict:
+    """Open the host's folder dialog. Runs only for a local client request."""
+    kind = info.get("kind")
+    command = info.get("command")
+    if not command:
+        return {"error": "no native folder dialog is available"}
+
+    try:
+        if kind == "macos":
+            escaped = str(start).replace("\\", "\\\\").replace('"', '\\"')
+            script = (
+                'set theFolder to choose folder with prompt '
+                '"Choose a folder for Similar Image Remover" '
+                f'default location (POSIX file "{escaped}")\n'
+                "POSIX path of theFolder"
+            )
+            proc = subprocess.run(
+                [command, "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=NATIVE_PICKER_TIMEOUT,
+            )
+        elif kind == "windows":
+            escaped = str(start).replace("'", "''")
+            script = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$d.Description = 'Choose a folder for Similar Image Remover'; "
+                f"$d.SelectedPath = '{escaped}'; "
+                "$d.ShowNewFolderButton = $true; "
+                "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+                "{ $d.SelectedPath } else { exit 1 }"
+            )
+            proc = subprocess.run(
+                [command, "-NoProfile", "-STA", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=NATIVE_PICKER_TIMEOUT,
+            )
+        elif kind == "kdialog":
+            proc = subprocess.run(
+                [
+                    command,
+                    "--getexistingdirectory",
+                    str(start),
+                    "--title",
+                    "Choose a folder for Similar Image Remover",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=NATIVE_PICKER_TIMEOUT,
+            )
+        elif kind == "yad":
+            proc = subprocess.run(
+                [
+                    command,
+                    "--file",
+                    "--directory",
+                    "--title=Choose a folder for Similar Image Remover",
+                    f"--filename={start}/",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=NATIVE_PICKER_TIMEOUT,
+            )
+        else:  # zenity and anything else directory-capable
+            proc = subprocess.run(
+                [
+                    command,
+                    "--file-selection",
+                    "--directory",
+                    "--title=Choose a folder for Similar Image Remover",
+                    f"--filename={start}/",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=NATIVE_PICKER_TIMEOUT,
+            )
+    except subprocess.TimeoutExpired:
+        return {"error": "the folder dialog timed out"}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+    if proc.returncode != 0:
+        error = (proc.stderr or "").strip()
+        cancelled = (
+            "User canceled" in error
+            or "-128" in error
+            or (proc.returncode == 1 and not error)
+        )
+        if cancelled:
+            return {"cancelled": True}
+        return {"error": error or f"the folder dialog exited with {proc.returncode}"}
+
+    lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+    if not lines:
+        return {"cancelled": True}
+    chosen = Path(lines[-1]).expanduser()
+    try:
+        chosen = chosen.resolve()
+    except OSError:
+        pass
+    if not chosen.is_dir():
+        return {"error": f"the chosen path is not a directory: {chosen}"}
+    return {"path": str(chosen)}
 
 
 # ---------------------------------------------------------------------------
@@ -964,6 +1605,7 @@ def open_dataset(dataset: Path, config: Optional[Dict] = None) -> Dict:
     dataset = dataset.expanduser().resolve()
     if not dataset.is_dir():
         raise FileNotFoundError(f"not a directory: {dataset}")
+    remember_recent(dataset)
     cancel_scan(mark_cancelled=False)
     with CFG_LOCK:
         CFG["dataset"] = dataset
@@ -1142,17 +1784,32 @@ class Handler(BaseHTTPRequestHandler):
 
         The UI always sends X-Requested-With, which is not a "simple" header and
         therefore forces a CORS preflight that this server never approves. The
-        Origin check covers the rest.
+        Origin check covers the rest. Behind a trusted reverse proxy the browser
+        sees the proxy's public host, so accept its X-Forwarded-Host/Proto as
+        well as the Host the upstream received.
         """
         if self.headers.get("X-Requested-With") != "similar-image-remover":
             return False
         origin = self.headers.get("Origin")
-        if origin:
-            host = self.headers.get("Host", "")
-            allowed = {f"http://{host}", f"https://{host}"}
-            if origin not in allowed:
-                return False
-        return True
+        if not origin:
+            return True
+
+        hosts = {self.headers.get("Host", "")}
+        protocols = {"http", "https"}
+        if is_trusted_proxy(self.client_address[0]):
+            forwarded_host = self.headers.get("X-Forwarded-Host")
+            if forwarded_host:
+                hosts.update(
+                    part.strip() for part in forwarded_host.split(",") if part.strip()
+                )
+            forwarded_proto = self.headers.get("X-Forwarded-Proto")
+            if forwarded_proto:
+                protocols.add(forwarded_proto.split(",")[0].strip())
+
+        allowed = {
+            f"{protocol}://{host}" for host in hosts if host for protocol in protocols
+        }
+        return origin in allowed
 
     # ------------------------------------------------------------------- GET
     def do_GET(self) -> None:  # noqa: N802
@@ -1174,8 +1831,45 @@ class Handler(BaseHTTPRequestHandler):
                 }
             )
 
+        if path == "/api/client":
+            context = client_context(self.client_address[0], self.headers)
+            context["home"] = str(Path.home())
+            context["platform"] = sys.platform
+            context["recent"] = load_recent()
+            return self._json(context)
+
         if path == "/api/state":
             return self._json(state_response())
+
+        if path == "/api/browse":
+            query = urllib.parse.parse_qs(parsed.query)
+            raw = query.get("path", [""])[0]
+            if not raw:
+                with CFG_LOCK:
+                    dataset = CFG.get("dataset")
+                raw = str(dataset) if dataset else str(Path.home())
+            try:
+                target = resolve_browse_path(raw)
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+            except FileNotFoundError as exc:
+                return self._json({"error": str(exc)}, 404)
+            except PermissionError as exc:
+                return self._json({"error": str(exc)}, 403)
+            show_hidden = query.get("show_hidden", ["0"])[0].lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            try:
+                payload = browse_payload(target, show_hidden)
+            except PermissionError as exc:
+                return self._json({"error": str(exc)}, 403)
+            except FileNotFoundError as exc:
+                return self._json({"error": str(exc)}, 404)
+            payload["client"] = client_context(self.client_address[0], self.headers)
+            return self._json(payload)
 
         if path == "/api/results":
             dataset = CFG.get("dataset")
@@ -1258,6 +1952,58 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except OSError as exc:
                 return self._json({"error": f"cannot open folder: {exc}"}, 400)
+
+        if path == "/api/mkdir":
+            try:
+                parent = resolve_browse_path(str(body.get("parent", "")))
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+            except FileNotFoundError as exc:
+                return self._json({"error": str(exc)}, 404)
+            except PermissionError as exc:
+                return self._json({"error": str(exc)}, 403)
+            try:
+                target = make_folder(parent, str(body.get("name", "")))
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+            except FileExistsError as exc:
+                return self._json({"error": str(exc)}, 409)
+            except PermissionError as exc:
+                return self._json({"error": f"cannot create folder: {exc}"}, 403)
+            except OSError as exc:
+                return self._json({"error": f"cannot create folder: {exc}"}, 400)
+            return self._json({"path": str(target)})
+
+        if path == "/api/pick-folder":
+            context = client_context(self.client_address[0], self.headers)
+            picker = context["native_picker"]
+            if not context["local"] or not picker["available"]:
+                return self._json(
+                    {"error": picker.get("reason") or "the native folder dialog is not available to this client"},
+                    403,
+                )
+            with CFG_LOCK:
+                dataset = CFG.get("dataset")
+            start_raw = str(body.get("start", "")).strip()
+            start = None
+            if start_raw:
+                try:
+                    start = resolve_browse_path(start_raw)
+                except (ValueError, FileNotFoundError, PermissionError):
+                    start = None
+            if start is None:
+                start = dataset if dataset is not None and Path(dataset).is_dir() else Path.home()
+
+            if not NATIVE_PICKER_LOCK.acquire(blocking=False):
+                return self._json(
+                    {"error": "a folder dialog is already open on the server computer"},
+                    409,
+                )
+            try:
+                result = run_native_picker(start, picker)
+            finally:
+                NATIVE_PICKER_LOCK.release()
+            return self._json(result)
 
         if path == "/api/scan":
             dataset = CFG.get("dataset")
@@ -1468,11 +2214,32 @@ def run_server(
     auth: bool = True,
     open_browser: bool = False,
     defaults: Optional[Dict] = None,
+    trusted_proxies: Optional[List[str]] = None,
+    native_picker: bool = True,
+    public_url: Optional[str] = None,
 ) -> int:
     defaults_cfg, error = normalise_config(defaults or {}, DEFAULT_CONFIG)
     if error:
         print(f"Error: invalid defaults: {error}", file=sys.stderr)
         return 2
+
+    networks = [
+        ipaddress.ip_network("127.0.0.1/32"),
+        ipaddress.ip_network("::1/128"),
+    ]
+    for item in trusted_proxies or []:
+        for part in str(item).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                networks.append(ipaddress.ip_network(part, strict=False))
+            except ValueError:
+                print(
+                    f"Error: not a valid --trusted-proxy address/CIDR: {part}",
+                    file=sys.stderr,
+                )
+                return 2
 
     dataset = None
     if directory:
@@ -1493,6 +2260,11 @@ def run_server(
                 "defaults": defaults_cfg,
                 "scan_proc": None,
                 "scan_config": None,
+                "trusted_proxies": networks,
+                "native_picker_enabled": bool(native_picker),
+                "native_picker": None,
+                "lan_ips": None,
+                "public_url": public_url,
             }
         )
 
@@ -1500,6 +2272,10 @@ def run_server(
     server, bound_host, bind_error = choose_server(host, port)
     if server is None:
         return 2
+
+    with CFG_LOCK:
+        CFG["lan_ips"] = set(lan_addresses())
+    picker = native_picker_info()
 
     bound_port = server.server_address[1]
     print("\nSimilar Image Remover — web UI", flush=True)
@@ -1516,16 +2292,26 @@ def run_server(
         print(f"  dataset: {dataset}", flush=True)
     else:
         print("  dataset: (none — choose a folder in the page)", flush=True)
+    if picker["available"]:
+        print(f"  picker:  native ({picker['label']})", flush=True)
+    else:
+        print(
+            f"  picker:  in-page browser ({picker['reason'] or 'native dialog unavailable'})",
+            flush=True,
+        )
 
     if not auth:
         print(
             "\n  WARNING: authentication is disabled (--no-auth).\n"
-            "  Anyone who can reach this port can view and delete files.",
+            "  Anyone who can reach this port can view and delete files, and\n"
+            "  browse the server's folders.",
             flush=True,
         )
 
     local_url = f"http://127.0.0.1:{bound_port}/"
     print(f"\n  local:   {local_url}", flush=True)
+    if public_url:
+        print(f"  public:  {public_url}", flush=True)
     if bound_host in ("127.0.0.1", "localhost", "::1"):
         print("  network: disabled (loopback only)", flush=True)
     else:
@@ -1581,6 +2367,24 @@ def main(argv=None) -> int:
     parser.add_argument("--password", default=None)
     parser.add_argument("--no-auth", action="store_true")
     parser.add_argument("--open", dest="open_browser", action="store_true")
+    parser.add_argument(
+        "--trusted-proxy",
+        action="append",
+        default=[],
+        metavar="CIDR",
+        help="address/CIDR of a reverse proxy whose X-Forwarded-* headers may "
+        "be trusted (loopback is always trusted). Repeatable.",
+    )
+    parser.add_argument(
+        "--no-native-picker",
+        action="store_true",
+        help="never open a folder dialog on this computer (use the in-page browser)",
+    )
+    parser.add_argument(
+        "--public-url",
+        default=None,
+        help="external URL to print in the startup banner (for a reverse proxy)",
+    )
     args = parser.parse_args(argv)
 
     if not args.no_auth and not (args.username and (args.password or os.environ.get("SIR_PASSWORD"))):
@@ -1597,6 +2401,9 @@ def main(argv=None) -> int:
         password=args.password or os.environ.get("SIR_PASSWORD"),
         auth=not args.no_auth,
         open_browser=args.open_browser,
+        trusted_proxies=args.trusted_proxy,
+        native_picker=not args.no_native_picker,
+        public_url=args.public_url,
     )
 
 

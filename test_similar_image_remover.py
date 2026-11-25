@@ -13,8 +13,10 @@ import threading
 import time
 import base64
 import http.client
+import ipaddress
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 from PIL import Image
@@ -1051,6 +1053,239 @@ class TestWebHelpers(unittest.TestCase):
         self.assertAlmostEqual(lower["threshold"], 0.35)
 
 
+class TestFolderPickerHelpers(unittest.TestCase):
+    """Counts, directory browsing, proxy classification and native dialogs."""
+
+    def setUp(self):
+        from web import server as web
+
+        self.web = web
+        self.tmp = Path(tempfile.mkdtemp())
+        self.dataset = self.tmp / "data"
+        self.dataset.mkdir()
+
+        self.old_runs = web.RUNS_ROOT
+        web.RUNS_ROOT = self.tmp / "runs"
+        web.RUNS_ROOT.mkdir()
+        self.old_cfg = dict(web.CFG)
+        web.CFG.clear()
+        web.CFG.update(
+            {
+                "dataset": None,
+                "slug": None,
+                "auth": False,
+                "defaults": dict(web.DEFAULT_CONFIG),
+                "trusted_proxies": [
+                    ipaddress.ip_network("127.0.0.1/32"),
+                    ipaddress.ip_network("::1/128"),
+                ],
+                "native_picker_enabled": True,
+                "native_picker": {
+                    "available": True,
+                    "label": "Open Finder…",
+                    "kind": "macos",
+                    "command": "/usr/bin/osascript",
+                    "reason": None,
+                },
+                "lan_ips": {"192.168.1.10"},
+                "scan_proc": None,
+                "scan_config": None,
+            }
+        )
+        web.STATES.clear()
+        web.clear_count_cache()
+
+        Image.new("RGB", (32, 32), (255, 0, 0)).save(self.dataset / "root.png")
+        Image.new("RGB", (32, 32), (0, 255, 0)).save(self.dataset / "root.avif")
+        visible = self.dataset / "visible"
+        visible.mkdir()
+        Image.new("RGB", (32, 32), (0, 0, 255)).save(visible / "a.png")
+        nested = visible / "nested"
+        nested.mkdir()
+        Image.new("RGB", (32, 32), (10, 20, 30)).save(nested / "b.jpg")
+        hidden = self.dataset / ".hidden"
+        hidden.mkdir()
+        Image.new("RGB", (32, 32), (30, 20, 10)).save(hidden / "c.webp")
+
+        self.heic_available = False
+        try:
+            import pillow_heif
+
+            pillow_heif.register_heif_opener()
+            Image.new("RGB", (32, 32), (1, 2, 3)).save(
+                self.dataset / "root.heic", format="HEIF"
+            )
+            self.heic_available = True
+        except Exception:  # noqa: BLE001 - optional plugin
+            pass
+
+    def tearDown(self):
+        web = self.web
+        web.cancel_scan(mark_cancelled=False)
+        web.CFG.clear()
+        web.CFG.update(self.old_cfg)
+        web.RUNS_ROOT = self.old_runs
+        web.STATES.clear()
+        web.clear_count_cache()
+        shutil.rmtree(self.tmp)
+
+    def _expected_total(self):
+        return 6 if self.heic_available else 5
+
+    def test_supported_extensions_include_modern_formats(self):
+        extensions = self.web.core.supported_image_extensions()
+        for extension in (".png", ".jpg", ".webp", ".avif"):
+            self.assertIn(extension, extensions)
+        if self.heic_available:
+            self.assertIn(".heic", extensions)
+            self.assertIn(".heif", extensions)
+
+    def test_calculate_hashes_processes_avif_and_heic(self):
+        hashes = self.web.core.calculate_hashes(
+            str(self.dataset), hash_methods=["ahash"]
+        )
+        self.assertEqual(len(hashes), self._expected_total())
+        self.assertTrue(any(path.endswith(".avif") for path in hashes))
+        if self.heic_available:
+            self.assertTrue(any(path.endswith(".heic") for path in hashes))
+
+    def test_count_images_recursive_and_direct(self):
+        recursive = self.web.count_images(self.dataset, recursive=True)
+        self.assertEqual(recursive["total"], self._expected_total())
+        self.assertFalse(recursive["truncated"])
+        self.assertEqual(recursive["by_ext"][".png"], 2)
+        self.assertEqual(recursive["by_ext"][".jpg"], 1)
+        self.assertEqual(recursive["by_ext"][".webp"], 1)
+        self.assertEqual(recursive["by_ext"][".avif"], 1)
+
+        direct = self.web.count_images(self.dataset, recursive=False)
+        self.assertEqual(direct["total"], 3 if self.heic_available else 2)
+
+    def test_count_images_truncates(self):
+        result = self.web.count_images(self.dataset, recursive=True, max_files=2)
+        self.assertEqual(result["total"], 2)
+        self.assertTrue(result["truncated"])
+
+    def test_browse_hides_hidden_and_reports_direct_counts(self):
+        payload = self.web.browse_payload(self.dataset, False)
+        names = [entry["name"] for entry in payload["entries"]]
+        self.assertNotIn(".hidden", names)
+        self.assertIn("visible", names)
+        self.assertEqual(payload["counts"]["total"], self._expected_total())
+        visible = next(entry for entry in payload["entries"] if entry["name"] == "visible")
+        self.assertEqual(visible["direct_images"], 1)
+
+        with_hidden = self.web.browse_payload(self.dataset, True)
+        self.assertIn(".hidden", [entry["name"] for entry in with_hidden["entries"]])
+
+    def test_make_folder_creates_and_rejects_bad_names(self):
+        created = self.web.make_folder(self.dataset, "fresh")
+        self.assertTrue(created.is_dir())
+        with self.assertRaises(FileExistsError):
+            self.web.make_folder(self.dataset, "fresh")
+        for name in ("../escape", "a/b", "..", ""):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    self.web.make_folder(self.dataset, name)
+
+    def test_parse_forwarded_ip(self):
+        self.assertEqual(
+            str(self.web.parse_forwarded_ip({"X-Forwarded-For": "192.168.1.50, 10.0.0.1"})),
+            "192.168.1.50",
+        )
+        self.assertEqual(
+            str(self.web.parse_forwarded_ip({"X-Real-IP": "10.0.0.5"})),
+            "10.0.0.5",
+        )
+        self.assertEqual(
+            str(self.web.parse_forwarded_ip({"Forwarded": 'for="[2001:db8::1]:1234";proto=https'})),
+            "2001:db8::1",
+        )
+        self.assertIsNone(self.web.parse_forwarded_ip({}))
+
+    def test_client_context_local_direct(self):
+        context = self.web.client_context("127.0.0.1", {})
+        self.assertTrue(context["local"])
+        self.assertTrue(context["native_picker"]["available"])
+
+    def test_client_context_remote_lan_is_not_local(self):
+        context = self.web.client_context("192.168.1.50", {})
+        self.assertFalse(context["local"])
+        self.assertFalse(context["native_picker"]["available"])
+
+    def test_client_context_trusted_proxy_forwarded_remote(self):
+        context = self.web.client_context(
+            "127.0.0.1", {"X-Forwarded-For": "192.168.1.50"}
+        )
+        self.assertTrue(context["proxied"])
+        self.assertFalse(context["local"])
+        self.assertFalse(context["native_picker"]["available"])
+
+    def test_client_context_trusted_proxy_forwarded_local(self):
+        context = self.web.client_context(
+            "127.0.0.1", {"X-Forwarded-For": "192.168.1.10"}
+        )
+        self.assertTrue(context["local"])
+        self.assertTrue(context["native_picker"]["available"])
+
+    def test_client_context_proxy_without_forwarded_ip_hides_native(self):
+        context = self.web.client_context(
+            "127.0.0.1", {"Tailscale-User-Login": "test-user"}
+        )
+        self.assertFalse(context["native_picker"]["available"])
+        self.assertIn("proxy", context["native_picker"]["reason"])
+
+    def test_client_context_mobile_user_agent_is_remote(self):
+        context = self.web.client_context(
+            "127.0.0.1",
+            {"User-Agent": "Mozilla/5.0 (Linux; Android 15; Pixel) Mobile Safari/537.36"},
+        )
+        self.assertFalse(context["local"])
+        self.assertFalse(context["native_picker"]["available"])
+        self.assertIn("mobile", context["native_picker"]["reason"])
+
+    def test_detect_native_picker_respects_disable_flag(self):
+        self.web.CFG["native_picker_enabled"] = False
+        info = self.web.detect_native_picker()
+        self.assertFalse(info["available"])
+        self.assertIn("no-native-picker", info["reason"])
+
+    def test_run_native_picker_returns_a_directory(self):
+        target = self.dataset / "visible"
+        process = mock.Mock(returncode=0, stdout=str(target) + "/\n", stderr="")
+        with mock.patch.object(self.web.subprocess, "run", return_value=process):
+            result = self.web.run_native_picker(
+                self.dataset, self.web.CFG["native_picker"]
+            )
+        self.assertEqual(result, {"path": str(target.resolve())})
+
+    def test_run_native_picker_reports_cancel(self):
+        process = mock.Mock(returncode=1, stdout="", stderr="User canceled. (-128)")
+        with mock.patch.object(self.web.subprocess, "run", return_value=process):
+            result = self.web.run_native_picker(
+                self.dataset, self.web.CFG["native_picker"]
+            )
+        self.assertEqual(result, {"cancelled": True})
+
+    def test_run_native_picker_reports_error(self):
+        process = mock.Mock(returncode=2, stdout="", stderr="boom")
+        with mock.patch.object(self.web.subprocess, "run", return_value=process):
+            result = self.web.run_native_picker(
+                self.dataset, self.web.CFG["native_picker"]
+            )
+        self.assertEqual(result, {"error": "boom"})
+
+    def test_recent_round_trip(self):
+        self.web.remember_recent(self.dataset)
+        self.assertEqual(self.web.load_recent()[0], str(self.dataset.resolve()))
+        other = self.tmp / "other"
+        other.mkdir()
+        self.web.remember_recent(other)
+        recent = self.web.load_recent()
+        self.assertEqual(recent[0], str(other.resolve()))
+        self.assertIn(str(self.dataset.resolve()), recent)
+
+
 class TestWebServer(unittest.TestCase):
     """End-to-end HTTP tests against a real server on a free port."""
 
@@ -1090,8 +1325,22 @@ class TestWebServer(unittest.TestCase):
                     "defaults": dict(web.DEFAULT_CONFIG),
                     "scan_proc": None,
                     "scan_config": None,
+                    "trusted_proxies": [
+                        ipaddress.ip_network("127.0.0.1/32"),
+                        ipaddress.ip_network("::1/128"),
+                    ],
+                    "native_picker_enabled": True,
+                    "native_picker": {
+                        "available": True,
+                        "label": "Open Finder…",
+                        "kind": "macos",
+                        "command": "/usr/bin/osascript",
+                        "reason": None,
+                    },
+                    "lan_ips": set(),
                 }
             )
+        web.clear_count_cache()
 
         self.server, _, _ = web.choose_server("127.0.0.1", 0)
         self.assertIsNotNone(self.server)
@@ -1146,6 +1395,127 @@ class TestWebServer(unittest.TestCase):
                 return state
             time.sleep(0.05)
         self.fail("scan did not finish")
+
+    def test_client_and_browse_endpoints(self):
+        status, client, _ = self._request("GET", "/api/client")
+        self.assertEqual(status, 200)
+        self.assertTrue(client["local"])
+        self.assertTrue(client["native_picker"]["available"])
+
+        sub = self.dataset / "sub"
+        sub.mkdir()
+        shutil.copy(self.dataset / "large.png", sub / "copy.png")
+        hidden = self.dataset / ".hidden"
+        hidden.mkdir()
+        shutil.copy(self.dataset / "other.png", hidden / "secret.png")
+
+        status, payload, _ = self._request(
+            "GET", f"/api/browse?path={urllib.parse.quote(str(self.dataset))}"
+        )
+        self.assertEqual(status, 200)
+        names = [entry["name"] for entry in payload["entries"]]
+        self.assertIn("sub", names)
+        self.assertNotIn(".hidden", names)
+        self.assertEqual(payload["counts"]["total"], 5)
+        sub_entry = next(entry for entry in payload["entries"] if entry["name"] == "sub")
+        self.assertEqual(sub_entry["direct_images"], 1)
+
+        status, payload, _ = self._request(
+            "GET",
+            f"/api/browse?path={urllib.parse.quote(str(self.dataset))}&show_hidden=1",
+        )
+        self.assertEqual(status, 200)
+        self.assertIn(".hidden", [entry["name"] for entry in payload["entries"]])
+
+        status, _, _ = self._request(
+            "GET", "/api/browse?path=/this/path/does/not/exist"
+        )
+        self.assertEqual(status, 404)
+
+    def test_mkdir_endpoint(self):
+        status, payload, _ = self._request(
+            "POST",
+            "/api/mkdir",
+            {"parent": str(self.dataset), "name": "new folder"},
+        )
+        self.assertEqual(status, 200)
+        created = Path(payload["path"])
+        self.assertTrue(created.is_dir())
+        self.assertEqual(created.name, "new folder")
+
+        status, payload, _ = self._request(
+            "POST",
+            "/api/mkdir",
+            {"parent": str(self.dataset), "name": "new folder"},
+        )
+        self.assertEqual(status, 409)
+
+        status, payload, _ = self._request(
+            "POST",
+            "/api/mkdir",
+            {"parent": str(self.dataset), "name": "../escape"},
+        )
+        self.assertEqual(status, 400)
+
+    def test_remote_proxy_cannot_open_native_picker(self):
+        status, payload, _ = self._request(
+            "POST",
+            "/api/pick-folder",
+            {"start": str(self.dataset)},
+            headers={"X-Forwarded-For": "192.168.1.50"},
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("error", payload)
+
+        status, payload, _ = self._request(
+            "POST",
+            "/api/pick-folder",
+            {"start": str(self.dataset)},
+            headers={"Tailscale-User-Login": "test-user"},
+        )
+        self.assertEqual(status, 403)
+
+    def test_mobile_user_agent_cannot_open_native_picker(self):
+        status, client, _ = self._request(
+            "GET",
+            "/api/client",
+            headers={
+                "User-Agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9) Mobile Safari/537.36"
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(client["local"])
+        self.assertFalse(client["native_picker"]["available"])
+
+    def test_native_picker_endpoint_returns_a_path(self):
+        with mock.patch.object(
+            self.web, "run_native_picker", return_value={"path": str(self.dataset)}
+        ):
+            status, payload, _ = self._request(
+                "POST",
+                "/api/pick-folder",
+                {"start": str(self.dataset)},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"path": str(self.dataset)})
+
+    def test_ui_uses_relative_urls_for_subpath_proxies(self):
+        html = self.web.INDEX_HTML.read_text()
+        for needle in (
+            '"/api/',
+            "'/api/",
+            '"/thumb/',
+            "'/thumb/",
+            "`/thumb/",
+            '"/preview/',
+            "'/preview/",
+            '"/image/',
+            "'/image/",
+            "`/image/",
+        ):
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, html)
+        self.assertIn("api/browse", html)
 
     def test_ping_and_state_round_trip(self):
         status, payload, _ = self._request("GET", "/api/ping")
