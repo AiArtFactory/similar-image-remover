@@ -392,6 +392,7 @@
   let currentSlug = null;
   let pendingView = null;
   let lastScanSignature = "";
+  let pendingScanSignature = null;
   let pollTimer = null;
   let armed = { path: null, timer: null };
   let lightboxPath = null;
@@ -1116,14 +1117,24 @@
       return;
     }
     if (next.job && next.job.phase === "done" && wasRunning) {
-      // Do not overwrite lastScanSignature with the controls here: the user may
-      // have edited them while the scan was running. Comparing against the
-      // signature captured when the scan started keeps the dirty notice honest.
+      // Commit the signature only after the scan actually lands. A cancelled
+      // or failed scan must leave the previous successful signature in place,
+      // so the panel can say the controls no longer match the displayed results.
+      if (pendingScanSignature) {
+        lastScanSignature = pendingScanSignature;
+        pendingScanSignature = null;
+      }
       checkDirty();
       await loadResults({ preserveScroll: true });
     }
     if (next.job && next.job.phase === "error") {
+      pendingScanSignature = null;
+      checkDirty();
       banner("Scan failed:\n" + (next.job.error || "unknown error"), "err");
+    }
+    if (next.job && next.job.phase === "cancelled") {
+      pendingScanSignature = null;
+      checkDirty();
     }
   }
 
@@ -1140,12 +1151,10 @@
       const reply = await api("/api/scan", config);
       serverState.job = reply.job;
       serverState.config = reply.config;
-      lastScanSignature = signature(config);
-      markDirty(false);
-      results = null;
-      selected.clear();
-      updateBulkBar();
-      $("groups").replaceChildren();
+      pendingScanSignature = signature(config);
+      // Keep the previous grid visible while the new scan runs. Clearing it made
+      // a cancel or a failure leave a blank page with no way back to the last
+      // usable results.
       renderJob(reply.job);
       schedulePoll();
     } catch (err) {
@@ -1157,8 +1166,10 @@
     try {
       const reply = await api("/api/cancel", {});
       serverState.job = reply.job;
+      pendingScanSignature = null;
       stopPolling();
       renderJob(reply.job);
+      checkDirty();
       toast("Scan cancelled.");
     } catch (err) {
       toast(errorText(err), "err");
@@ -1182,6 +1193,7 @@
       serverState = next;
       applyDataset(next);
       populateSettings(next.config);
+      pendingScanSignature = null;
       results = null;
       selected.clear();
       $("groups").replaceChildren();
