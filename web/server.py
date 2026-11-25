@@ -1278,6 +1278,8 @@ def perform_deletions(dataset: Path, state: Dict, paths: List[str]) -> Dict:
             state.get("resolutions", {}).pop(rel, None)
             state.get("sizes", {}).pop(rel, None)
             remove_derived(dataset, rel)
+        # The folder picker shows image counts; deleting files invalidates them.
+        clear_count_cache()
 
         if log_lines:
             log_path = run_dir(dataset) / "deleted.log"
