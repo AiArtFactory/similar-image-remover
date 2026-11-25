@@ -5,6 +5,7 @@ Find and optionally delete similar/duplicate images in a directory using percept
 ## Features
 
 - **Cross-platform**: Works on Windows, macOS, and Linux
+- **Web UI**: Optional local/LAN review page with a grouped thumbnail grid, pinning, per-file deletion and confirmed bulk deletion
 - **Resolution-aware dedupe**: keeps the copy with the most pixels, and breaks exact ties randomly (visible in the preview, reproducible with `--seed`)
 - **Device detection**: reports CUDA/MPS/ROCm availability, though hashing itself runs on the CPU
 - **Multiple hash methods**: Choose from 7 different perceptual hashing algorithms
@@ -196,13 +197,13 @@ python similar_image_remover.py -d /path/to/images --delete --image-width 30 --i
 ```
 
 **Large Image Handling:**
-Images exceeding 2000 pixels in either dimension are automatically scaled down while preserving aspect ratio. This ensures:
+Images exceeding 1000 pixels in either dimension are automatically scaled down while preserving aspect ratio. This ensures:
 - Images display correctly in the terminal
 - No distortion or warping of the image
 - Original aspect ratio is maintained
 - Terminal performance is not impacted by huge images
 
-For example, a 4000x3000 image will be scaled to 2000x1500 before display.
+For example, a 4000x3000 image will be scaled to 1000x750 before display.
 
 **Important Notes:**
 - **Do not pipe the output** (e.g., don't use `| head`, `| less`, `| grep`) - this prevents the image protocol from working
@@ -227,11 +228,89 @@ If images don't display:
 4. Try resizing your terminal larger if images seem cut off
 5. The script auto-detects terminal capability via environment variables (`TERM`, `TERM_PROGRAM`)
 
+## Web UI
+
+The same scan can run as a local web app with a grouped thumbnail grid. It uses
+only the Python standard library for the server, so there is no extra dependency
+and no build step.
+
+```bash
+# local machine + LAN, protected by a browser username/password dialog
+python3 similar_image_remover.py --web --username me --password secret
+
+# start with a folder already loaded
+python3 similar_image_remover.py --web --username me --password secret -d /path/to/images
+
+# explicit opt-out for this run only
+python3 similar_image_remover.py --web --no-auth --port 8799
+
+# let the OS choose a free port
+python3 similar_image_remover.py --web --username me --password secret --port 0
+```
+
+**Authentication.** Web mode requires `--username` and `--password` (or the
+`SIR_PASSWORD` environment variable) unless `--no-auth` is passed. Unauthenticated
+requests receive HTTP 401 plus `WWW-Authenticate`, so the browser shows its native
+username/password dialog. Wrong credentials re-prompt; every route, including
+images, is protected. Basic Auth over plain HTTP is not encrypted — use it on your
+own Wi-Fi or pass `--local-only`, not on a public network. `--no-auth` prints a
+warning and lets anyone who can reach the port view and delete files.
+
+**Local and LAN access.** Web mode binds `0.0.0.0` by default and prints both
+URLs at startup:
+
+```
+local:   http://127.0.0.1:8799/
+network: http://192.168.1.23:8799/
+```
+
+Open the `local` URL on this machine, or the `network` URL on a phone/tablet on
+the same Wi-Fi. If macOS asks whether to allow Python to accept connections,
+allow it. `--local-only` binds `127.0.0.1` instead. `--port N` picks the port
+(default 8766); `--port 0` asks the OS for a free one and prints the number it
+assigned. A port that is already taken produces a short "choose another port"
+message and exit code 2. Stopping the server (Ctrl+C, `SIGTERM`, or killing the
+process) releases the port.
+
+**Choosing and switching folders.** `-d` is optional in web mode. With no folder,
+the page opens a path field; paste any absolute path (or a `~` path) and press
+**Open folder**. The current folder can be changed at any time: a running scan is
+cancelled and the new folder is scanned, or its cached results are loaded. There is
+no sandbox — the authenticated user can point the tool at any readable directory,
+which is intentional.
+
+**Settings.** The left panel exposes the same scan settings as the CLI: threshold,
+all seven hash methods (multi-select), hash size, ORB verification and its two
+tuning values, tie-break seed, GPU detection and diagnostics. Settings that change
+the hashes or verification mark the panel **Settings changed — press Scan to
+apply**. The threshold is different: pairs are cached down to 50% similarity, so
+moving the slider regroups the existing pairs instantly and starts no scan. Values
+below 50% need a rescan and are clamped with a notice. A blank seed is replaced by
+one random seed per scan, stored with the results so the keeper does not change on
+reload; enter a number to make it reproducible.
+
+**Review and delete.** Results are grouped into connected clusters. In each group
+the highest-resolution file is marked **KEEP** (the same rule and random tie-break
+as the CLI). Every other file starts selected for deletion; clear a checkbox to
+spare one. **Pin** makes a file immune to both bulk and individual deletion until
+it is unpinned. Per-tile **✕** arms on the first click and deletes on the second
+within 5 seconds. **Delete N** in a group header, or **Delete permanently** on the
+bottom bar, opens a confirmation listing the files and total size. Deletion is
+permanent `os.remove` — there is no trash and no undo — and the server refuses to
+empty a similarity group or delete a pinned file even if a stale page asks it to.
+Every removal is appended to `runs/<dataset-slug>/deleted.log`.
+
+**Cached data.** Scan results, pins, thumbnails (400 px) and previews (1280 px)
+live under `runs/<dataset-slug>/` and are gitignored. A folder that has been
+scanned before opens from that cache with a **Rescan** button; files removed
+outside the tool are pruned when the state loads. Thumbnails are generated on
+demand and cached; the grid never downloads full-size originals.
+
 ## Command Line Arguments
 
 | Long Option | Short | Description | Default |
 |-------------|-------|-------------|---------|
-| `--directory` | `-d` | Path to image directory | (required) |
+| `--directory` | `-d` | Path to image directory | required for CLI; optional for `--web` |
 | `--delete` | | Delete with confirmation prompt | `False` (dry run) |
 | `--force` | `-y` | Skip confirmation (use with --delete) | `False` |
 | `--threshold` | | Similarity threshold (0.0-1.0) | `0.90` (90%) |
@@ -247,13 +326,21 @@ If images don't display:
 | `--image-width` | | Max width for displayed images | Original size |
 | `--image-height` | | Max height for displayed images | Original size |
 | `--seed` | | Seed for reproducible tie-breaking between equal resolutions | `None` (random) |
+| `--web` | | Start the browser UI instead of the CLI workflow | `False` |
+| `--host` | | Web mode: bind address | `0.0.0.0` (LAN) |
+| `--local-only` | | Web mode: bind 127.0.0.1 only | `False` |
+| `--port` | | Web mode: port (`0` = OS-assigned, printed) | `8766` |
+| `--username` | | Web mode: Basic Auth username | required unless `--no-auth` |
+| `--password` | | Web mode: Basic Auth password (or `SIR_PASSWORD`) | required unless `--no-auth` |
+| `--no-auth` | | Web mode: serve without a login for this run | `False` |
+| `--open` | | Web mode: open the local URL in a browser | `False` |
 
 ## How It Works
 
 ### Hash-Based Comparison (Stage 1)
 
 1. **Hash Calculation**: Computes perceptual hash(es) for each image based on selected method(s)
-2. **Similarity Calculation**: Converts hash difference to a percentage (0.0 to 1.0)
+2. **Similarity Calculation**: Converts hash difference to a percentage (0.0 to 1.0), measured against the hash's real bit count (64 bits at size 8, 1024 at size 32, 42 for `colorhash`)
 3. **Multi-Method**: When using multiple methods, returns the maximum similarity
 4. **Filtering**: Only images with similarity >= threshold proceed to Stage 2 (or are reported as similar)
 
@@ -288,12 +375,16 @@ If images don't display:
 - **Safe exit**: Ctrl+C or 'n' at prompt cancels without any changes
 - **Force flag**: `-y` / `--force` available for automation (use with caution)
 - **Dry run by default**: Running without `--delete` is completely safe (preview only)
+- **Web pins**: a pinned file cannot be deleted, individually or in bulk, until it is unpinned
+- **Web group invariant**: the server refuses any request that would delete every file in a similarity group, even from a stale page
 
 ## Safety Notes
 
 - **Always run in dry-run mode first** to see what would be deleted
-- **Back up your images** before using `--delete`
+- **Back up your images** before using `--delete` or the web UI
 - **Review the preview** showing kept vs deleted files before confirming
+- **Web deletion is permanent too**: `os.remove`, no trash and no undo. The grid requires a second click on ✕ for one file and a confirmation listing the count, names and total size for bulk actions.
+- **Web auth is only as strong as the network**: Basic Auth over plain HTTP is not encrypted. Use `--local-only` or a trusted Wi-Fi network; never expose the port to the internet.
 - The script uses the full file path to handle images in subdirectories correctly
 - Duplicate detection is based on visual similarity, not byte-for-byte equality
 - ORB verification adds significant accuracy but increases processing time
@@ -306,9 +397,11 @@ python3 -m unittest test_similar_image_remover -v
 python3 test_similar_image_remover.py
 ```
 
-49 tests run. The four `TestIntegration` cases skip, because `test_images/` is
+76 tests run. The four `TestIntegration` cases skip, because `test_images/` is
 gitignored and the `create_test_images.py` generator was removed from the repository.
-`OK (skipped=4)` is the expected result, not a failure.
+`OK (skipped=4)` is the expected result, not a failure. The web tests start a real
+server on a free loopback port and cover Basic Auth, path traversal, the dataset
+picker, a scan, pinning, deletion invariants and the thumbnail/preview cache.
 
 ## Examples
 
@@ -365,5 +458,7 @@ If you're getting false positives (images marked as similar when they're not):
 - **GPU**: `--gpu` detects and prints CUDA/MPS, but hashing runs on the CPU because
   `imagehash` is CPU-based — it does not currently change throughput
 - **Hash size**: The CLI default is `--hash-size 32`; larger values are slower and
-  more precise. Note that the callable functions default to `8`, so pass the value
-  explicitly when driving them from code
+  more precise. Similarity is measured against the hash's real bit count, so changing
+  the size changes the scale consistently instead of collapsing large hashes to 0.
+  Note that the callable functions default to `8`, so pass the value explicitly when
+  driving them from code

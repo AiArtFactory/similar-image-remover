@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:," />
+<title>Similar Image Remover — review</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1b1e24; --panel2: #21252d; --line: #2e3440;
+    --txt: #e6e8ec; --dim: #9aa3b2; --accent: #4c8dff;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--txt);
+               font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { min-height: 100vh; padding-bottom: 110px; }
+  button, select, input[type="text"], input[type="number"] {
+    background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
+    border-radius: 5px; padding: 5px 9px; font-size: 12px; font-family: inherit;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { background: #2a2f39; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: #21477f; border-color: #2f6bd6; }
+  button.primary:hover:not(:disabled) { background: #2a5aa8; }
+  button.bad { background: #4c1d1d; border-color: #ef4444; }
+  button.bad.armed { background: #b91c1c; border-color: #fca5a5; color: #fff; }
+  button.small { padding: 3px 7px; font-size: 11px; }
+  input[type="text"] { min-width: 0; }
+  .grow { flex: 1; }
+
+  header { position: sticky; top: 0; z-index: 20; display: flex; align-items: center;
+           gap: 10px; min-height: 50px; padding: 8px 12px; background: var(--panel);
+           border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .3px;
+              white-space: nowrap; }
+  #dsname { max-width: 42vw; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; color: var(--dim); font-size: 12px; }
+  #dsname b { color: var(--txt); font-weight: 600; }
+  #status { color: var(--dim); font-size: 12px; white-space: nowrap; }
+
+  #folderbar { display: none; gap: 8px; padding: 10px 12px; background: var(--panel2);
+               border-bottom: 1px solid var(--line); align-items: center; }
+  #folderbar.show { display: flex; }
+  #folderbar input { flex: 1; }
+  #folderbar .hint { color: var(--dim); font-size: 11px; white-space: nowrap; }
+
+  #banner { display: none; margin: 10px 12px 0; padding: 8px 11px; border-radius: 6px;
+            background: #1f2a44; color: #cbd5e1; border: 1px solid var(--line);
+            white-space: pre-wrap; }
+  #banner.show { display: block; }
+  #banner.warn { background: #3a2f14; color: #fcd34d; }
+  #banner.err { background: #3b1d1d; color: #fca5a5; }
+
+  main { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 14px;
+         padding: 12px; align-items: start; }
+  @media (max-width: 900px) { main { display: block; padding: 8px; } }
+
+  #panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+           overflow: hidden; position: sticky; top: 62px; max-height: calc(100vh - 78px);
+           overflow-y: auto; }
+  @media (max-width: 900px) { #panel { position: static; max-height: none; margin-bottom: 10px; } }
+  #panel > summary { list-style: none; cursor: pointer; padding: 9px 12px; font-weight: 600;
+                     background: var(--panel2); border-bottom: 1px solid var(--line); }
+  #panel > summary::-webkit-details-marker { display: none; }
+  #panel > summary::before { content: "▸ "; color: var(--dim); }
+  #panel[open] > summary::before { content: "▾ "; }
+  .panelbody { padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .panelbody label.row { display: flex; align-items: center; gap: 8px; }
+  .panelbody .label { display: flex; align-items: center; justify-content: space-between;
+                      gap: 8px; font-size: 12px; }
+  .panelbody .hint { color: var(--dim); font-size: 11px; margin: -4px 0 0; }
+  .panelbody fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0;
+                        padding: 7px 9px 9px; }
+  .panelbody legend { color: var(--dim); font-size: 11px; padding: 0 4px; }
+  .methods { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; }
+  .methods label { display: flex; align-items: center; gap: 6px; font-size: 11px;
+                   white-space: nowrap; min-width: 0; }
+  .methods label span { overflow: hidden; text-overflow: ellipsis; }
+  .methods .mhint { color: var(--dim); }
+  #orbOpts { display: flex; flex-direction: column; gap: 8px; padding-left: 22px; }
+  #orbOpts[hidden] { display: none; }
+  .actions { display: flex; gap: 8px; }
+  .actions button { flex: 1; }
+  #dirty { color: var(--warn); font-size: 11px; }
+  #dirty[hidden] { display: none; }
+  #threshold { width: 100%; accent-color: var(--accent); }
+
+  #content { min-width: 0; }
+  #empty { display: none; text-align: center; padding: 70px 20px; color: var(--dim); }
+  #empty.show { display: block; }
+  #empty h2 { color: var(--txt); font-size: 16px; margin-bottom: 6px; }
+  #empty p { max-width: 540px; margin: 8px auto; }
+
+  #scanbar { display: none; margin: 0 0 10px; padding: 9px 11px; border-radius: 7px;
+             background: var(--panel); border: 1px solid var(--line); }
+  #scanbar.show { display: block; }
+  #scanbar .line { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+  #scanbar .where { color: var(--dim); font-size: 11px; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
+  .bar { height: 5px; border-radius: 4px; background: #0d0f13; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent);
+             transition: width .25s ease; }
+
+  #toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
+  #toolbar input[type="search"] { flex: 1; min-width: 140px; background: var(--panel2);
+                                  color: var(--txt); border: 1px solid var(--line);
+                                  border-radius: 5px; padding: 5px 9px; font-size: 12px; }
+  #stats { color: var(--dim); font-size: 12px; width: 100%; }
+  #stats b { color: var(--txt); }
+
+  #groups { display: flex; flex-direction: column; gap: 14px; }
+  .group { background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+           overflow: hidden; }
+  .grouphead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+               padding: 8px 11px; background: var(--panel2); border-bottom: 1px solid var(--line); }
+  .gtitle { font-weight: 600; }
+  .gmeta { color: var(--dim); font-size: 11px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+           gap: 10px; padding: 10px; }
+  .tile { background: var(--panel2); border: 1px solid var(--line); border-radius: 7px;
+          overflow: hidden; display: flex; flex-direction: column; }
+  .tile.keep { border-color: #22c55e; }
+  .tile.pinned { border-color: #d97706; }
+  .tile.sel { box-shadow: 0 0 0 2px #b91c1c inset; }
+  .thumbwrap { position: relative; aspect-ratio: 4 / 3; background: #0d0f13; }
+  .thumbwrap::before { content: "loading…"; position: absolute; inset: 0; z-index: 1;
+                       display: flex; align-items: center; justify-content: center;
+                       color: #5b6472; font-size: 11px; letter-spacing: .04em;
+                       pointer-events: none; }
+  .thumbwrap.loaded::before { display: none; }
+  .thumbwrap.failed::before { content: "preview unavailable"; color: var(--bad); }
+  .thumbwrap img { position: relative; z-index: 2; width: 100%; height: 100%;
+                   object-fit: contain; display: block; cursor: zoom-in; }
+  .badge { position: absolute; top: 5px; padding: 1px 5px; border-radius: 4px;
+           font-size: 10px; letter-spacing: .03em; background: #0f172a99;
+           border: 1px solid var(--line); color: var(--dim); }
+  .badge.keep { left: 5px; color: #86efac; border-color: #22c55e; }
+  .badge.pin { left: 5px; color: #fcd34d; border-color: #d97706; }
+  .badge.keep + .badge.pin { left: 58px; }
+  .badge.sim { right: 5px; }
+  .meta { padding: 6px 8px 2px; }
+  .meta .name { font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; }
+  .meta .sub { color: var(--dim); font-size: 11px; }
+  .tilebar { display: flex; align-items: center; gap: 6px; padding: 6px 8px 8px; }
+  .tilebar .sel { display: flex; align-items: center; gap: 4px; font-size: 11px;
+                  color: var(--dim); margin-right: auto; }
+  .tilebar .sel input:disabled + span { opacity: .55; }
+  .tilebar .icon { padding: 2px 6px; font-size: 11px; }
+
+  .emptygroup { padding: 24px; text-align: center; color: var(--dim); }
+
+  #bulkbar { position: fixed; left: 50%; bottom: var(--bulk-bottom, 14px);
+             transform: translateX(-50%);
+             z-index: 30; display: none; align-items: center; gap: 12px;
+             max-width: calc(100vw - 24px); padding: 9px 12px; border-radius: 9px;
+             background: #1f242c; border: 1px solid #3a4351; box-shadow: 0 8px 30px #0008; }
+  #bulkbar.show { display: flex; }
+  #bulkbar .count { font-size: 12px; white-space: nowrap; }
+  #bulkbar .count b { color: #fca5a5; }
+
+  #toasts { position: fixed; right: 14px; bottom: 90px; z-index: 60; display: flex;
+            flex-direction: column; gap: 6px; align-items: flex-end; }
+  .toast { max-width: min(420px, 80vw); padding: 7px 10px; border-radius: 6px;
+           background: #1f2a44; border: 1px solid var(--line); color: #cbd5e1;
+           font-size: 12px; box-shadow: 0 6px 24px #0007; }
+  .toast.err { background: #3b1d1d; color: #fca5a5; }
+  .toast.ok { background: #14351f; color: #86efac; }
+
+  #overlay { position: fixed; inset: 0; z-index: 50; display: none; background: #000b;
+             align-items: center; justify-content: center; padding: 18px; }
+  #overlay.show { display: flex; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          max-width: 760px; width: 100%; max-height: 90vh; overflow: auto;
+          box-shadow: 0 20px 60px #000a; }
+  .cardhead { display: flex; align-items: center; gap: 10px; padding: 10px 13px;
+              background: var(--panel2); border-bottom: 1px solid var(--line); }
+  .cardhead h2 { font-size: 13px; margin: 0; }
+  .cardbody { padding: 13px; }
+  .cardbody p { margin: 0 0 9px; color: var(--dim); }
+  .cardbody ul { margin: 6px 0 12px; padding-left: 18px; color: var(--dim); font-size: 12px; }
+  .cardfoot { display: flex; gap: 8px; justify-content: flex-end; padding: 11px 13px;
+              border-top: 1px solid var(--line); }
+  #lightbox .card { max-width: 1100px; }
+  #lbimgwrap { background: #0d0f13; text-align: center; min-height: 200px;
+               display: flex; align-items: center; justify-content: center; }
+  #lbimg { max-width: 100%; max-height: 72vh; display: block; }
+  .lbbadges { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+  .pill { font-size: 11px; border: 1px solid var(--line); border-radius: 999px;
+          padding: 1px 8px; color: var(--dim); }
+  .pill.keep { color: #86efac; border-color: #22c55e; }
+  .pill.pin { color: #fcd34d; border-color: #d97706; }
+  #lbname { font-size: 13px; margin: 0 0 2px; word-break: break-all; }
+  #lbactions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  #lbactions a { color: var(--accent); font-size: 12px; align-self: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Similar Image Remover</h1>
+  <div id="dsname"><b>No dataset</b></div>
+  <button id="changeFolderBtn" class="small">Change folder</button>
+  <button id="settingsBtn" class="small">Settings</button>
+  <span class="grow"></span>
+  <div id="status">connecting…</div>
+</header>
+
+<div id="folderbar">
+  <input id="folderInput" type="text" spellcheck="false" autocomplete="off"
+         placeholder="Paste the folder to process, e.g. /path/to/images" />
+  <button id="openFolderBtn" class="primary">Open folder</button>
+  <span class="hint">~ is expanded · the folder can be changed at any time</span>
+</div>
+
+<div id="banner"></div>
+
+<main>
+  <details id="panel" open>
+    <summary>Settings</summary>
+    <div class="panelbody">
+      <div class="label"><span>Similarity threshold</span><output id="thresholdLabel">90%</output></div>
+      <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.9" />
+      <p class="hint">Applies instantly to cached pairs. Values below 50% need a rescan.</p>
+
+      <fieldset>
+        <legend>Hash methods</legend>
+        <div class="methods" id="methods">
+          <label><input type="checkbox" value="ahash" checked> <span>ahash <span class="mhint">fast</span></span></label>
+          <label><input type="checkbox" value="phash" checked> <span>phash <span class="mhint">balance</span></span></label>
+          <label><input type="checkbox" value="dhash"> <span>dhash <span class="mhint">edges</span></span></label>
+          <label><input type="checkbox" value="dhash_vertical"> <span>dhash_v <span class="mhint">vertical</span></span></label>
+          <label><input type="checkbox" value="whash"> <span>whash <span class="mhint">structure</span></span></label>
+          <label><input type="checkbox" value="colorhash"> <span>colorhash <span class="mhint">colour</span></span></label>
+          <label title="Crop-resistant hash: several segments, most robust"><input type="checkbox" value="crop_resistant"> <span>crop_resistant</span></label>
+        </div>
+      </fieldset>
+
+      <label class="label" for="hashSize"><span>Hash size</span>
+        <select id="hashSize">
+          <option value="8">8</option>
+          <option value="16">16</option>
+          <option value="32" selected>32</option>
+          <option value="64">64</option>
+        </select>
+      </label>
+
+      <label class="row"><input id="verifyOrb" type="checkbox" /> ORB feature verification</label>
+      <div id="orbOpts" hidden>
+        <label class="label" for="orbMatches"><span>Minimum ORB matches</span>
+          <input id="orbMatches" type="number" min="1" max="1000" value="10" style="width:76px" />
+        </label>
+        <label class="label" for="orbThreshold"><span>ORB confidence</span>
+          <input id="orbThreshold" type="number" min="0" max="1" step="0.05" value="0.8" style="width:76px" />
+        </label>
+      </div>
+
+      <label class="label" for="seed"><span>Tie-break seed</span>
+        <input id="seed" type="number" placeholder="random" style="width:110px" />
+      </label>
+      <p class="hint">Blank picks one random seed per scan, then reuses it so the keeper never changes on reload.</p>
+
+      <label class="row"><input id="gpu" type="checkbox" /> Detect GPU (hashing stays on the CPU)</label>
+      <label class="row"><input id="verbose" type="checkbox" /> Diagnostics in the scan log</label>
+
+      <div class="actions">
+        <button id="scanBtn" class="primary">Scan</button>
+        <button id="cancelBtn" disabled>Cancel</button>
+      </div>
+      <div id="dirty" hidden>Settings changed — press Scan to apply.</div>
+    </div>
+  </details>
+
+  <section id="content">
+    <div id="empty">
+      <h2>Open a folder of images</h2>
+      <p>Paste an absolute path above. The scan runs in the background and the page
+         fills in as groups are found.</p>
+      <p>Deletion is permanent, exactly like the CLI. Pin anything you want to keep.</p>
+    </div>
+
+    <div id="scanbar">
+      <div class="line">
+        <b id="scanStage">Scanning</b>
+        <span class="where" id="scanWhere"></span>
+        <span class="grow"></span>
+        <span id="scanCount"></span>
+      </div>
+      <div class="bar"><i id="scanProgress"></i></div>
+    </div>
+
+    <div id="toolbar" hidden>
+      <input id="search" type="search" placeholder="Filter by filename…" />
+      <select id="sort" title="Sort groups">
+        <option value="reclaimable">most reclaimable</option>
+        <option value="groupsize">largest group</option>
+        <option value="similarity">most similar</option>
+        <option value="name">name</option>
+      </select>
+      <button id="selectLosersBtn" class="small">Select proposed deletions</button>
+      <button id="clearSelBtn" class="small">Clear</button>
+      <button id="rescanBtn" class="small">Rescan</button>
+      <div id="stats"></div>
+    </div>
+
+    <div id="groups"></div>
+  </section>
+</main>
+
+<div id="bulkbar">
+  <span class="count" id="bulkcount">0 selected</span>
+  <button id="bulkDeleteBtn" class="bad">Delete permanently</button>
+</div>
+
+<div id="toasts"></div>
+
+<div id="overlay">
+  <div class="card" id="modalCard" style="display:none">
+    <div class="cardhead"><h2 id="modalTitle">Confirm</h2></div>
+    <div class="cardbody" id="modalBody"></div>
+    <div class="cardfoot">
+      <button id="modalCancel">Cancel</button>
+      <button id="modalConfirm" class="bad">Delete permanently</button>
+    </div>
+  </div>
+
+  <div class="card" id="lightbox" style="display:none">
+    <div class="cardhead">
+      <h2>Preview</h2><span class="grow"></span>
+      <button id="lbClose" class="small">Close</button>
+    </div>
+    <div id="lbimgwrap"><img id="lbimg" alt="" /></div>
+    <div class="cardbody">
+      <p id="lbname"></p>
+      <div class="lbbadges" id="lbbadges"></div>
+      <div id="lbmeta" class="hint"></div>
+      <div id="lbactions">
+        <button id="lbPin" class="small">Pin</button>
+        <button id="lbDelete" class="bad small">Delete permanently</button>
+        <a id="lbOriginal" href="#" target="_blank" rel="noopener">open original</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const encodePath = (rel) => String(rel).split("/").map(encodeURIComponent).join("/");
+  const fmtBytes = (n) => {
+    n = Number(n) || 0;
+    if (n < 1024) return n + " B";
+    const units = ["KB", "MB", "GB", "TB"];
+    let i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+    return n.toFixed(n >= 10 ? 1 : 2) + " " + units[i];
+  };
+  const fmtPct = (x) => (Number(x) * 100).toFixed(1) + "%";
+  const fmtRes = (pair) => {
+    if (!pair || !pair[0] || !pair[1]) return "unreadable";
+    return pair[0] + "×" + pair[1];
+  };
+  const areaOf = (pair) => (pair ? Number(pair[0]) * Number(pair[1]) : 0);
+  const debounce = (fn, ms) => {
+    let t = null;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  };
+
+  let serverState = null;
+  let results = null;
+  let selected = new Set();
+  let threshold = 0.9;
+  let sortMode = "reclaimable";
+  let search = "";
+  let currentSlug = null;
+  let pendingView = null;
+  let lastScanSignature = "";
+  let pollTimer = null;
+  let armed = { path: null, timer: null };
+  let lightboxPath = null;
+  let lightboxArmed = false;
+  let lightboxTimer = null;
+  let modalConfirmHandler = null;
+
+  // ---------------------------------------------------------------- API
+  async function api(path, body) {
+    const opts = { headers: {} };
+    if (body !== undefined) {
+      opts.method = "POST";
+      opts.headers["Content-Type"] = "application/json";
+      opts.headers["X-Requested-With"] = "similar-image-remover";
+      opts.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, opts);
+    let data = null;
+    try { data = await response.json(); } catch (_) { /* empty or non-JSON */ }
+    if (!response.ok) {
+      const err = new Error(
+        (data && (data.error || "request failed")) || ("HTTP " + response.status)
+      );
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  }
+
+  // ------------------------------------------------------------ feedback
+  function toast(message, kind = "") {
+    const el = document.createElement("div");
+    el.className = "toast " + kind;
+    el.textContent = message;
+    $("toasts").appendChild(el);
+    setTimeout(() => el.remove(), 5000);
+  }
+
+  function banner(message, kind = "") {
+    const el = $("banner");
+    el.textContent = message;
+    el.className = "show " + kind;
+  }
+  function hideBanner() { $("banner").className = ""; }
+
+  function errorText(err) {
+    if (err.status === 401) return "Authentication required. Reload the page and enter the username and password.";
+    if (err.data && err.data.details) {
+      const lines = Object.entries(err.data.details).slice(0, 8)
+        .map(([path, why]) => `${path}: ${why}`);
+      return (err.message || "Request refused") + "\n" + lines.join("\n");
+    }
+    return err.message || String(err);
+  }
+
+  // ------------------------------------------------------------- settings
+  function signature(config) {
+    return JSON.stringify({
+      hash_methods: [...(config.hash_methods || [])].sort(),
+      hash_size: Number(config.hash_size),
+      verify_orb: !!config.verify_orb,
+      orb_min_matches: Number(config.orb_min_matches),
+      orb_threshold: Number(config.orb_threshold),
+      use_gpu: !!config.use_gpu,
+      verbose: !!config.verbose,
+      seed: config.seed == null ? null : Number(config.seed),
+    });
+  }
+
+  function chosenMethods() {
+    return [...$("methods").querySelectorAll("input:checked")].map((el) => el.value);
+  }
+
+  function readConfig() {
+    const methods = chosenMethods();
+    if (!methods.length) {
+      toast("Choose at least one hash method.", "err");
+      return null;
+    }
+    const blank = (v) => v === "" || v == null;
+    return {
+      threshold: Number($("threshold").value),
+      hash_methods: methods,
+      hash_size: Number($("hashSize").value),
+      verify_orb: $("verifyOrb").checked,
+      orb_min_matches: Number($("orbMatches").value || 10),
+      orb_threshold: Number($("orbThreshold").value || 0.8),
+      use_gpu: $("gpu").checked,
+      verbose: $("verbose").checked,
+      seed: blank($("seed").value) ? null : Number($("seed").value),
+    };
+  }
+
+  function applyView(view) {
+    if (!view) return;
+    if (Number.isFinite(view.threshold)) {
+      threshold = Math.max(0.5, Math.min(1, view.threshold));
+      $("threshold").value = String(threshold);
+    }
+    if (["reclaimable", "groupsize", "similarity", "name"].includes(view.sort)) {
+      sortMode = view.sort;
+      $("sort").value = sortMode;
+    }
+    if (typeof view.search === "string") {
+      search = view.search;
+      $("search").value = search;
+    }
+    updateThresholdLabel();
+  }
+
+  function populateSettings(config) {
+    config = config || {};
+    const methods = new Set(config.hash_methods || ["ahash", "phash"]);
+    for (const box of $("methods").querySelectorAll("input")) {
+      box.checked = methods.has(box.value);
+    }
+    const size = String(config.hash_size ?? 32);
+    const select = $("hashSize");
+    if (![...select.options].some((o) => o.value === size)) {
+      const option = document.createElement("option");
+      option.value = size;
+      option.textContent = size;
+      select.appendChild(option);
+    }
+    select.value = size;
+    $("verifyOrb").checked = !!config.verify_orb;
+    $("orbMatches").value = String(config.orb_min_matches ?? 10);
+    $("orbThreshold").value = String(config.orb_threshold ?? 0.8);
+    $("seed").value = config.seed == null ? "" : String(config.seed);
+    $("gpu").checked = !!config.use_gpu;
+    $("verbose").checked = !!config.verbose;
+    threshold = Math.max(0.5, Math.min(1, Number(config.threshold ?? 0.9)));
+    $("threshold").value = String(threshold);
+    updateThresholdLabel();
+    syncOrbVisibility();
+    lastScanSignature = signature(readConfig());
+    markDirty(false);
+    if (pendingView) { applyView(pendingView); pendingView = null; }
+  }
+
+  function updateThresholdLabel() {
+    $("thresholdLabel").textContent = Math.round(threshold * 100) + "%";
+  }
+
+  function markDirty(show) {
+    $("dirty").hidden = !show;
+  }
+
+  function checkDirty() {
+    if (!serverState || !serverState.dataset) return;
+    const now = signature(readConfig());
+    markDirty(now !== lastScanSignature);
+  }
+
+  function syncOrbVisibility() {
+    $("orbOpts").hidden = !$("verifyOrb").checked;
+  }
+
+  // --------------------------------------------------------------- state
+  const RUNNING = new Set(["scanning", "loading"]);
+  const isRunning = (job) => !!job && RUNNING.has(job.phase);
+
+  function applyDataset(state) {
+    serverState = state;
+    const ds = state.dataset;
+    if (ds) {
+      $("dsname").innerHTML = "<b>" + esc(ds.name) + "</b>";
+      $("dsname").title = ds.path;
+      if (ds.slug !== currentSlug) {
+        currentSlug = ds.slug;
+        pendingView = loadView(ds.slug);
+      }
+      $("empty").classList.remove("show");
+      $("toolbar").hidden = false;
+      $("folderInput").value = ds.path;
+    } else {
+      currentSlug = null;
+      $("dsname").innerHTML = "<b>No dataset</b>";
+      $("dsname").title = "";
+      $("empty").classList.add("show");
+      $("toolbar").hidden = true;
+      $("groups").replaceChildren();
+      results = null;
+      selected.clear();
+      updateBulkBar();
+      showFolderBar(true);
+    }
+  }
+
+  function loadView(slug) {
+    try { return JSON.parse(localStorage.getItem("sir.view." + slug) || "null"); }
+    catch (_) { return null; }
+  }
+
+  function saveView() {
+    if (!currentSlug) return;
+    try {
+      localStorage.setItem("sir.view." + currentSlug, JSON.stringify({
+        threshold, sort: sortMode, search,
+      }));
+    } catch (_) { /* private mode */ }
+  }
+
+  function showFolderBar(show) {
+    $("folderbar").classList.toggle("show", !!show);
+    if (show) setTimeout(() => $("folderInput").focus(), 30);
+  }
+
+  // ------------------------------------------------------------ results
+  async function loadResults({ preserveScroll = false } = {}) {
+    if (!serverState || !serverState.dataset) return;
+    const y = window.scrollY;
+    try {
+      const data = await api(`/api/results?threshold=${encodeURIComponent(threshold)}`);
+      results = data;
+      selected = new Set();
+      for (const group of data.groups) {
+        for (const path of group.paths) {
+          if (path !== group.keep && !(group.protected || []).includes(path)) {
+            selected.add(path);
+          }
+        }
+      }
+      if (data.clamped) {
+        banner("Thresholds below 50% need a rescan; showing 50%.", "warn");
+      } else {
+        hideBanner();
+      }
+      renderStats();
+      renderGroups();
+      updateBulkBar();
+      $("status").textContent = data.groups.length
+        ? `${data.groups.length} group${data.groups.length === 1 ? "" : "s"}`
+        : "no matches";
+    } catch (err) {
+      if (err.status === 409) {
+        results = null;
+        renderStats();
+        renderGroups();
+      } else {
+        banner(errorText(err), "err");
+      }
+    }
+    if (preserveScroll) window.scrollTo(0, y);
+  }
+
+  function visibleGroups() {
+    if (!results) return [];
+    const q = search.trim().toLowerCase();
+    let groups = results.groups;
+    if (q) {
+      groups = groups.filter((group) =>
+        group.paths.some((path) => path.toLowerCase().includes(q)));
+    }
+    groups = groups.slice();
+    if (sortMode === "groupsize") {
+      groups.sort((a, b) => b.paths.length - a.paths.length || a.paths[0].localeCompare(b.paths[0]));
+    } else if (sortMode === "similarity") {
+      groups.sort((a, b) => b.max_similarity - a.max_similarity || a.paths[0].localeCompare(b.paths[0]));
+    } else if (sortMode === "name") {
+      groups.sort((a, b) => a.paths[0].localeCompare(b.paths[0]));
+    } else {
+      groups.sort((a, b) => b.reclaimable - a.reclaimable || a.paths[0].localeCompare(b.paths[0]));
+    }
+    return groups;
+  }
+
+  function renderStats() {
+    const el = $("stats");
+    if (!results) {
+      el.textContent = serverState && serverState.dataset ? "Waiting for a scan…" : "";
+      return;
+    }
+    const s = results.stats;
+    const when = results.scanned_at
+      ? new Date(results.scanned_at * 1000).toLocaleString()
+      : "unknown";
+    el.innerHTML =
+      `<b>${s.groups}</b> group${s.groups === 1 ? "" : "s"} · ` +
+      `<b>${s.files}</b> file${s.files === 1 ? "" : "s"} · ` +
+      `<b>${fmtBytes(s.reclaimable)}</b> reclaimable at ` +
+      `<b>${Math.round(results.threshold * 100)}%</b> · scanned ${esc(when)}`;
+  }
+
+  function groupIndexFor(path) {
+    if (!results) return -1;
+    return results.groups.findIndex((group) => group.paths.includes(path));
+  }
+
+  function isPinned(path) {
+    return !!(results && results.protected && results.protected.includes(path));
+  }
+
+  function tileElement(path) {
+    for (const el of $("groups").querySelectorAll(".tile")) {
+      if (el.dataset.path === path) return el;
+    }
+    return null;
+  }
+
+  function makeTile(group, path) {
+    const keep = path === group.keep;
+    const pinned = (group.protected || []).includes(path);
+    const isSelected = selected.has(path);
+    const similarity = group.similarity[path] || 0;
+    const resolution = group.resolutions[path] || [0, 0];
+    const size = group.sizes[path] || 0;
+
+    const el = document.createElement("div");
+    el.className = "tile" + (keep ? " keep" : "") + (pinned ? " pinned" : "") +
+      (isSelected ? " sel" : "");
+    el.dataset.path = path;
+
+    el.innerHTML = `
+      <div class="thumbwrap" data-preview="${esc(path)}" title="Click for a large preview">
+        <img src="/thumb/${encodePath(path)}" alt="${esc(path)}" loading="lazy" />
+        ${keep ? '<span class="badge keep">KEEP</span>' : ""}
+        ${pinned ? '<span class="badge pin">PINNED</span>' : ""}
+        <span class="badge sim">${fmtPct(similarity)}</span>
+      </div>
+      <div class="meta">
+        <div class="name" title="${esc(path)}">${esc(path)}</div>
+        <div class="sub">${fmtRes(resolution)} · ${fmtBytes(size)}</div>
+      </div>
+      <div class="tilebar">
+        <label class="sel"><input class="selbox" type="checkbox"
+          ${isSelected ? "checked" : ""} ${(pinned || keep) ? "disabled" : ""} />
+          <span>delete</span></label>
+        <button class="icon pinbtn" title="${pinned ? "Unpin (allow deletion)" : "Pin (never bulk-delete)"}">${pinned ? "Unpin" : "Pin"}</button>
+        <button class="icon xbtn" title="Delete this file permanently" ${pinned ? "disabled" : ""}>✕</button>
+      </div>`;
+    return el;
+  }
+
+  function renderGroups() {
+    const container = $("groups");
+    const groups = visibleGroups();
+    if (!results || !groups.length) {
+      container.innerHTML = results
+        ? '<div class="emptygroup">No similar images at this threshold.</div>'
+        : "";
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    groups.forEach((group, visibleIndex) => {
+      // The visible order changes with search/sort. Data attributes must keep
+      // pointing at the real entry in results.groups, or a group's Delete
+      // button would act on whichever group happens to be at that position.
+      const groupIndex = results.groups.indexOf(group);
+      const section = document.createElement("section");
+      section.className = "group";
+      section.dataset.group = String(groupIndex);
+
+      const losers = group.paths.filter(
+        (path) => path !== group.keep && !(group.protected || []).includes(path));
+      const reclaimable = losers.reduce((sum, path) => sum + (group.sizes[path] || 0), 0);
+      const keepRes = fmtRes(group.resolutions[group.keep]);
+
+      const head = document.createElement("div");
+      head.className = "grouphead";
+      head.innerHTML = `
+        <span class="gtitle">Group ${visibleIndex + 1}</span>
+        <span class="gmeta">${group.paths.length} files · keeps ${esc(keepRes)}${group.tie ? " · resolution tie" : ""}</span>
+        <span class="grow"></span>
+        <span class="gmeta reclaim">${losers.length ? fmtBytes(reclaimable) + " reclaimable" : "all pinned"}</span>
+        <button class="small" data-group-delete="${groupIndex}" ${losers.length ? "" : "disabled"}>
+          Delete ${losers.length}
+        </button>`;
+      section.appendChild(head);
+
+      const tiles = document.createElement("div");
+      tiles.className = "tiles";
+      const ordered = [...group.paths].sort(
+        (a, b) => areaOf(group.resolutions[b]) - areaOf(group.resolutions[a]));
+      for (const path of ordered) tiles.appendChild(makeTile(group, path));
+      section.appendChild(tiles);
+      frag.appendChild(section);
+    });
+    container.replaceChildren(frag);
+  }
+
+  function updateBulkBar() {
+    const paths = [...selected];
+    let bytes = 0;
+    if (results) {
+      for (const group of results.groups) {
+        for (const path of paths) {
+          if (group.paths.includes(path)) bytes += group.sizes[path] || 0;
+        }
+      }
+    }
+    $("bulkcount").innerHTML = paths.length
+      ? `<b>${paths.length}</b> selected · ${fmtBytes(bytes)}`
+      : "0 selected";
+    $("bulkbar").classList.toggle("show", paths.length > 0);
+    $("bulkDeleteBtn").disabled = paths.length === 0;
+  }
+
+  function refreshGroupHead(group, section) {
+    const losers = group.paths.filter(
+      (path) => path !== group.keep && !(group.protected || []).includes(path));
+    const button = section.querySelector("[data-group-delete]");
+    if (button) {
+      button.textContent = "Delete " + losers.length;
+      button.disabled = losers.length === 0;
+    }
+    const reclaim = section.querySelector(".reclaim");
+    if (reclaim) {
+      const bytes = losers.reduce((sum, path) => sum + (group.sizes[path] || 0), 0);
+      reclaim.textContent = losers.length ? fmtBytes(bytes) + " reclaimable" : "all pinned";
+    }
+  }
+
+  // -------------------------------------------------------------- pins
+  async function togglePin(path) {
+    if (!results) return;
+    const groupIndex = groupIndexFor(path);
+    if (groupIndex < 0) return;
+    const group = results.groups[groupIndex];
+    const willPin = !(group.protected || []).includes(path);
+    try {
+      const reply = await api("/api/protect", { path, protected: willPin });
+      results.protected = reply.protected || [];
+      group.protected = (group.protected || []).filter((p) => p !== path);
+      if (willPin) group.protected.push(path);
+      if (willPin) selected.delete(path);
+
+      const section = $("groups").querySelector(`.group[data-group="${groupIndex}"]`);
+      const old = tileElement(path);
+      if (old) old.replaceWith(makeTile(group, path));
+      if (section) refreshGroupHead(group, section);
+      updateBulkBar();
+      toast(willPin ? "Pinned — bulk deletion will skip it." : "Unpinned.", "ok");
+      if (lightboxPath === path) updateLightbox();
+    } catch (err) {
+      toast(errorText(err), "err");
+    }
+  }
+
+  // ------------------------------------------------------------ deletion
+  function disarmTile() {
+    clearTimeout(armed.timer);
+    armed.timer = null;
+    if (armed.path) {
+      const el = tileElement(armed.path);
+      if (el) {
+        const button = el.querySelector(".xbtn");
+        if (button) { button.classList.remove("armed"); button.textContent = "✕"; }
+      }
+    }
+    armed.path = null;
+  }
+
+  function armTileDelete(path) {
+    if (isPinned(path)) {
+      toast("That file is pinned. Unpin it first if you really mean to delete it.", "err");
+      return;
+    }
+    if (armed.path === path) {
+      disarmTile();
+      // The second click is the confirmation for one file, like the reference
+      // tool's arm-twice convention. The extra modal is reserved for bulk work,
+      // where a single mistaken click could remove dozens of files.
+      deletePaths([path]);
+      return;
+    }
+    disarmTile();
+    armed.path = path;
+    const el = tileElement(path);
+    if (el) {
+      const button = el.querySelector(".xbtn");
+      if (button) { button.classList.add("armed"); button.textContent = "delete?"; }
+    }
+    toast("Click ✕ again within 5 s to delete this file.");
+    armed.timer = setTimeout(disarmTile, 5000);
+  }
+
+  function confirmDelete(paths) {
+    paths = [...new Set(paths)].filter((path) => !isPinned(path));
+    if (!paths.length) {
+      toast("Nothing to delete.", "err");
+      return;
+    }
+    let bytes = 0;
+    const names = [];
+    if (results) {
+      for (const group of results.groups) {
+        for (const path of paths) {
+          if (group.paths.includes(path)) {
+            bytes += group.sizes[path] || 0;
+            names.push(path);
+          }
+        }
+      }
+    }
+    const body = $("modalBody");
+    body.innerHTML =
+      `<p><b>${paths.length}</b> file${paths.length === 1 ? "" : "s"} · ` +
+      `${fmtBytes(bytes)} will be removed with <code>os.remove</code>.</p>` +
+      `<p>This cannot be undone. There is no trash and no undo.</p>` +
+      `<ul>${names.slice(0, 14).map((name) => `<li>${esc(name)}</li>`).join("")}` +
+      (names.length > 14 ? `<li>… and ${names.length - 14} more</li>` : "") + `</ul>`;
+    $(
+      "modalTitle"
+    ).textContent = `Delete ${paths.length} file${paths.length === 1 ? "" : "s"} permanently?`;
+    modalConfirmHandler = () => {
+      hideOverlay();
+      deletePaths(paths);
+    };
+    showOverlay("modal");
+  }
+
+  let deleting = false;
+
+  async function deletePaths(paths) {
+    if (deleting) return;
+    deleting = true;
+    $("bulkDeleteBtn").disabled = true;
+    try {
+      const reply = await api("/api/delete", { paths, threshold });
+      const count = (reply.deleted || []).length;
+      toast(`Deleted ${count} file${count === 1 ? "" : "s"}.`, "ok");
+      if ((reply.missing || []).length) {
+        toast(`${reply.missing.length} were already gone; state cleaned up.`, "warn");
+      }
+      if (Object.keys(reply.failed || {}).length) {
+        toast("Some files could not be deleted: " +
+          Object.values(reply.failed)[0], "err");
+      }
+      if (serverState) serverState.has_results = true;
+      await loadResults({ preserveScroll: true });
+    } catch (err) {
+      toast(errorText(err), "err");
+    } finally {
+      deleting = false;
+      updateBulkBar();
+    }
+  }
+
+  // ------------------------------------------------------------- lightbox
+  function openLightbox(path) {
+    if (!results) return;
+    const index = groupIndexFor(path);
+    if (index < 0) return;
+    const group = results.groups[index];
+    lightboxPath = path;
+    lightboxArmed = false;
+    $("lbname").textContent = path;
+    $("lbmeta").textContent = `${fmtRes(group.resolutions[path])} · ` +
+      `${fmtBytes(group.sizes[path] || 0)} · ${fmtPct(group.similarity[path] || 0)} similar` +
+      (group.tie ? " · resolution tie" : "");
+
+    const img = $("lbimg");
+    img.src = `/thumb/${encodePath(path)}`;
+    const preview = new Image();
+    preview.onload = () => {
+      if (lightboxPath === path) img.src = preview.src;
+    };
+    preview.src = `/preview/${encodePath(path)}`;
+    $("lbOriginal").href = `/image/${encodePath(path)}`;
+
+    const badges = [];
+    if (path === group.keep) badges.push('<span class="pill keep">KEEP</span>');
+    if ((group.protected || []).includes(path)) {
+      badges.push('<span class="pill pin">PINNED</span>');
+    }
+    badges.push(`<span class="pill">${fmtPct(group.similarity[path] || 0)}</span>`);
+    $("lbbadges").innerHTML = badges.join("");
+
+    const pinned = (group.protected || []).includes(path);
+    $("lbPin").textContent = pinned ? "Unpin" : "Pin";
+    $("lbDelete").disabled = pinned;
+    $("lbDelete").classList.remove("armed");
+    $("lbDelete").textContent = "Delete permanently";
+    showOverlay("lightbox");
+  }
+
+  function updateLightbox() {
+    if (lightboxPath) openLightbox(lightboxPath);
+  }
+
+  function armLightboxDelete() {
+    if (!lightboxPath) return;
+    if (isPinned(lightboxPath)) {
+      toast("That file is pinned. Unpin it first.", "err");
+      return;
+    }
+    if (lightboxArmed) {
+      const doomed = lightboxPath;
+      lightboxArmed = false;
+      hideOverlay();
+      deletePaths([doomed]);
+      return;
+    }
+    lightboxArmed = true;
+    $("lbDelete").classList.add("armed");
+    $("lbDelete").textContent = "click again to delete";
+    clearTimeout(lightboxTimer);
+    lightboxTimer = setTimeout(() => {
+      lightboxArmed = false;
+      $("lbDelete").classList.remove("armed");
+      $("lbDelete").textContent = "Delete permanently";
+    }, 5000);
+  }
+
+  // -------------------------------------------------------------- overlay
+  function showOverlay(which) {
+    $("overlay").classList.add("show");
+    $("modalCard").style.display = which === "modal" ? "block" : "none";
+    $("lightbox").style.display = which === "lightbox" ? "block" : "none";
+  }
+  function hideOverlay() {
+    $("overlay").classList.remove("show");
+    $("modalCard").style.display = "none";
+    $("lightbox").style.display = "none";
+    lightboxPath = null;
+    modalConfirmHandler = null;
+  }
+
+  // --------------------------------------------------------------- scan
+  function renderJob(job) {
+    const bar = $("scanbar");
+    if (!job || !isRunning(job)) {
+      $("scanBtn").disabled = !serverState || !serverState.dataset;
+      $("cancelBtn").disabled = true;
+      if (job && job.phase === "error") {
+        banner("Scan failed:\n" + (job.error || "unknown error"), "err");
+      }
+      if (job && job.phase === "cancelled") {
+        $("status").textContent = "scan cancelled";
+        bar.classList.remove("show");
+      }
+      if (job && job.phase === "done") bar.classList.remove("show");
+      return;
+    }
+    bar.classList.add("show");
+    $("scanBtn").disabled = true;
+    $("cancelBtn").disabled = false;
+    $("status").textContent = job.phase === "loading" ? "loading results…" : "scanning…";
+
+    const stage = job.phase === "loading" ? "Loading results" : {
+      starting: "Starting scan",
+      hashing: "Calculating hashes",
+      comparing: "Comparing image pairs",
+      orb: "Verifying with ORB",
+    }[job.stage] || "Scanning";
+    $("scanStage").textContent = stage;
+    $("scanWhere").textContent = job.current || "";
+    $("scanCount").textContent = job.total ? `${job.done}/${job.total}` : "";
+    const pct = job.total ? Math.min(100, (job.done / job.total) * 100) : 4;
+    $("scanProgress").style.width = pct + "%";
+  }
+
+  async function refreshState({ first = false } = {}) {
+    const previous = serverState;
+    let next;
+    try {
+      next = await api("/api/state");
+    } catch (err) {
+      banner(errorText(err), "err");
+      stopPolling();
+      return;
+    }
+    serverState = next;
+    const datasetChanged = !previous || !previous.dataset || !next.dataset ||
+      previous.dataset.slug !== next.dataset.slug;
+    if (datasetChanged) {
+      applyDataset(next);
+      populateSettings(next.config);
+      results = null;
+      selected.clear();
+      $("groups").replaceChildren();
+      updateBulkBar();
+    }
+    renderJob(next.job);
+
+    if (isRunning(next.job)) {
+      schedulePoll();
+      return;
+    }
+    stopPolling();
+    if (next.has_results && (!results || first)) {
+      await loadResults();
+    } else if (!next.has_results) {
+      renderStats();
+    }
+  }
+
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(() => pollOnce(), 900);
+  }
+  function stopPolling() {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+
+  async function pollOnce() {
+    pollTimer = null;
+    const wasRunning = isRunning(serverState && serverState.job);
+    let next;
+    try {
+      next = await api("/api/state");
+    } catch (err) {
+      banner(errorText(err), "err");
+      return;
+    }
+    serverState = next;
+    renderJob(next.job);
+    if (isRunning(next.job)) {
+      schedulePoll();
+      return;
+    }
+    if (next.job && next.job.phase === "done" && wasRunning) {
+      // Do not overwrite lastScanSignature with the controls here: the user may
+      // have edited them while the scan was running. Comparing against the
+      // signature captured when the scan started keeps the dirty notice honest.
+      checkDirty();
+      await loadResults({ preserveScroll: true });
+    }
+    if (next.job && next.job.phase === "error") {
+      banner("Scan failed:\n" + (next.job.error || "unknown error"), "err");
+    }
+  }
+
+  async function startScan() {
+    if (!serverState || !serverState.dataset) {
+      showFolderBar(true);
+      toast("Open a folder first.", "err");
+      return;
+    }
+    const config = readConfig();
+    if (!config) return;
+    hideBanner();
+    try {
+      const reply = await api("/api/scan", config);
+      serverState.job = reply.job;
+      serverState.config = reply.config;
+      lastScanSignature = signature(config);
+      markDirty(false);
+      results = null;
+      selected.clear();
+      updateBulkBar();
+      $("groups").replaceChildren();
+      renderJob(reply.job);
+      schedulePoll();
+    } catch (err) {
+      banner(errorText(err), "err");
+    }
+  }
+
+  async function cancelScan() {
+    try {
+      const reply = await api("/api/cancel", {});
+      serverState.job = reply.job;
+      stopPolling();
+      renderJob(reply.job);
+      toast("Scan cancelled.");
+    } catch (err) {
+      toast(errorText(err), "err");
+    }
+  }
+
+  async function openFolder(rawPath) {
+    const path = String(rawPath || "").trim();
+    if (!path) {
+      toast("Enter a folder path.", "err");
+      $("folderInput").focus();
+      return;
+    }
+    stopPolling();
+    hideBanner();
+    try {
+      const config = readConfig();
+      const payload = { path };
+      if (config) payload.config = config;
+      const next = await api("/api/dataset", payload);
+      serverState = next;
+      applyDataset(next);
+      populateSettings(next.config);
+      results = null;
+      selected.clear();
+      $("groups").replaceChildren();
+      updateBulkBar();
+      showFolderBar(false);
+      if (next.has_results) {
+        await loadResults();
+      } else {
+        renderStats();
+      }
+      renderJob(next.job);
+      if (isRunning(next.job)) schedulePoll();
+    } catch (err) {
+      banner(errorText(err), "err");
+    }
+  }
+
+  function placeBulkBar() {
+    // A fixed element is positioned against the layout viewport, which on a
+    // phone can be taller than the visible area while browser chrome is shown.
+    // Lift the bar by that difference so its buttons never sit under the URL bar.
+    const visual = window.visualViewport;
+    const hidden = visual ? Math.max(0, window.innerHeight - visual.height) : 0;
+    document.documentElement.style.setProperty(
+      "--bulk-bottom", `${14 + hidden}px`
+    );
+  }
+
+  // --------------------------------------------------------------- events
+  const onThreshold = debounce(async () => {
+    threshold = Number($("threshold").value);
+    updateThresholdLabel();
+    saveView();
+    if (serverState && serverState.dataset && !isRunning(serverState.job)) {
+      await loadResults();
+    }
+  }, 260);
+
+  function bind() {
+    $("changeFolderBtn").addEventListener("click", () => {
+      const shown = $("folderbar").classList.contains("show");
+      showFolderBar(!shown);
+    });
+    $("settingsBtn").addEventListener("click", () => {
+      const panel = $("panel");
+      panel.open = true;
+      panel.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    $("openFolderBtn").addEventListener("click", () => openFolder($("folderInput").value));
+    $("folderInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") openFolder($("folderInput").value);
+    });
+
+    $("threshold").addEventListener("input", () => {
+      threshold = Number($("threshold").value);
+      updateThresholdLabel();
+      onThreshold();
+    });
+    for (const box of $("methods").querySelectorAll("input")) {
+      box.addEventListener("change", checkDirty);
+    }
+    for (const id of ["hashSize", "orbMatches", "orbThreshold", "seed", "gpu", "verbose"]) {
+      $(id).addEventListener("input", checkDirty);
+      $(id).addEventListener("change", checkDirty);
+    }
+    $("verifyOrb").addEventListener("change", () => {
+      syncOrbVisibility();
+      checkDirty();
+    });
+
+    $("scanBtn").addEventListener("click", startScan);
+    $("cancelBtn").addEventListener("click", cancelScan);
+    $("rescanBtn").addEventListener("click", startScan);
+    $("selectLosersBtn").addEventListener("click", () => {
+      if (!results) return;
+      selected = new Set();
+      for (const group of results.groups) {
+        for (const path of group.paths) {
+          if (path !== group.keep && !(group.protected || []).includes(path)) {
+            selected.add(path);
+          }
+        }
+      }
+      renderGroups();
+      updateBulkBar();
+    });
+    $("clearSelBtn").addEventListener("click", () => {
+      selected.clear();
+      renderGroups();
+      updateBulkBar();
+    });
+    $("bulkDeleteBtn").addEventListener("click", () => confirmDelete([...selected]));
+
+    $("search").addEventListener("input", () => {
+      search = $("search").value;
+      saveView();
+      renderGroups();
+    });
+    $("sort").addEventListener("change", () => {
+      sortMode = $("sort").value;
+      saveView();
+      renderGroups();
+    });
+
+    // Thumbnails are generated on demand from very large sources, so the box
+    // stays visibly "loading…" until the JPEG actually paints. Without this a
+    // first visit looks like a grid of broken images.
+    $("groups").addEventListener("load", (event) => {
+      if (event.target.tagName === "IMG") {
+        const wrap = event.target.closest(".thumbwrap");
+        if (wrap) { wrap.classList.add("loaded"); wrap.classList.remove("failed"); }
+      }
+    }, true);
+    $("groups").addEventListener("error", (event) => {
+      if (event.target.tagName === "IMG") {
+        const wrap = event.target.closest(".thumbwrap");
+        if (wrap) { wrap.classList.add("failed"); wrap.classList.remove("loaded"); }
+      }
+    }, true);
+
+    // Delegated tile controls.
+    $("groups").addEventListener("click", (event) => {
+      const tile = event.target.closest(".tile");
+      if (!tile) return;
+      const path = tile.dataset.path;
+      if (event.target.closest(".thumbwrap")) {
+        openLightbox(path);
+        return;
+      }
+      if (event.target.closest(".pinbtn")) {
+        togglePin(path);
+        return;
+      }
+      if (event.target.closest(".xbtn")) {
+        armTileDelete(path);
+      }
+    });
+    $("groups").addEventListener("change", (event) => {
+      if (!event.target.classList.contains("selbox")) return;
+      const tile = event.target.closest(".tile");
+      if (!tile) return;
+      const path = tile.dataset.path;
+      if (event.target.checked) selected.add(path);
+      else selected.delete(path);
+      tile.classList.toggle("sel", event.target.checked);
+      updateBulkBar();
+    });
+    $("groups").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-group-delete]");
+      if (!button || !results) return;
+      const group = results.groups[Number(button.dataset.groupDelete)];
+      if (!group) return;
+      const losers = group.paths.filter(
+        (path) => path !== group.keep && !(group.protected || []).includes(path));
+      confirmDelete(losers);
+    });
+
+    $("modalCancel").addEventListener("click", hideOverlay);
+    $("modalConfirm").addEventListener("click", () => {
+      if (modalConfirmHandler) modalConfirmHandler();
+    });
+    $("lbClose").addEventListener("click", hideOverlay);
+    $("lbPin").addEventListener("click", () => {
+      if (lightboxPath) togglePin(lightboxPath);
+    });
+    $("lbDelete").addEventListener("click", armLightboxDelete);
+    $("overlay").addEventListener("click", (event) => {
+      if (event.target === $("overlay")) hideOverlay();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        if ($("overlay").classList.contains("show")) hideOverlay();
+        else disarmTile();
+      }
+    });
+  }
+
+  // ----------------------------------------------------------------- boot
+  async function boot() {
+    bind();
+    placeBulkBar();
+    window.addEventListener("resize", placeBulkBar);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", placeBulkBar);
+    }
+    if (window.innerWidth < 900) $("panel").open = false;
+    try {
+      const state = await api("/api/state");
+      applyDataset(state);
+      populateSettings(state.config);
+      renderJob(state.job);
+      if (state.dataset && state.has_results) {
+        await loadResults();
+      } else {
+        renderStats();
+      }
+      if (isRunning(state.job)) schedulePoll();
+      if (!state.dataset) showFolderBar(true);
+      $("status").textContent = state.auth ? "authenticated" : "auth disabled";
+    } catch (err) {
+      banner(errorText(err), "err");
+      $("status").textContent = "cannot reach server";
+    }
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
