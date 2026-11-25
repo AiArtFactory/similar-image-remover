@@ -1056,41 +1056,6 @@
     $("scanProgress").style.width = pct + "%";
   }
 
-  async function refreshState({ first = false } = {}) {
-    const previous = serverState;
-    let next;
-    try {
-      next = await api("/api/state");
-    } catch (err) {
-      banner(errorText(err), "err");
-      stopPolling();
-      return;
-    }
-    serverState = next;
-    const datasetChanged = !previous || !previous.dataset || !next.dataset ||
-      previous.dataset.slug !== next.dataset.slug;
-    if (datasetChanged) {
-      applyDataset(next);
-      populateSettings(next.config);
-      results = null;
-      selected.clear();
-      $("groups").replaceChildren();
-      updateBulkBar();
-    }
-    renderJob(next.job);
-
-    if (isRunning(next.job)) {
-      schedulePoll();
-      return;
-    }
-    stopPolling();
-    if (next.has_results && (!results || first)) {
-      await loadResults();
-    } else if (!next.has_results) {
-      renderStats();
-    }
-  }
-
   function schedulePoll() {
     clearTimeout(pollTimer);
     pollTimer = setTimeout(() => pollOnce(), 900);

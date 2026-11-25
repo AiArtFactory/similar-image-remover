@@ -155,10 +155,6 @@ def rel_key(base: Path, path: Path) -> str:
     return path.resolve().relative_to(base.resolve()).as_posix()
 
 
-def quote_path(rel: str) -> str:
-    return "/".join(urllib.parse.quote(segment) for segment in rel.split("/"))
-
-
 def job_snapshot() -> Dict:
     with JOB_LOCK:
         return dict(JOB)
